@@ -1,9 +1,14 @@
 
 Discarded input sections
 
- .bss           0x00000000        0x0 build/main.o
  .ARM.attributes
-                0x00000000       0x12 build/main.o
+                0x00000000       0x12 build/startup.o
+ .comment       0x00000000       0x27 build/main.o
+ .ARM.attributes
+                0x00000000       0x33 build/main.o
+ .comment       0x00000000       0x27 build/gpio.o
+ .ARM.attributes
+                0x00000000       0x33 build/gpio.o
 
 Memory Configuration
 
@@ -12,20 +17,39 @@ Name             Origin             Length             Attributes
 
 Linker script and memory map
 
+LOAD build/startup.o
 LOAD build/main.o
+LOAD build/gpio.o
 
-.init           0x00080000       0x18
+.init           0x00080000       0x2c
  *(.init)
- .init          0x00080000       0x18 build/main.o
+ .init          0x00080000       0x2c build/startup.o
                 0x00080000                _start
 
-.text           0x00080018        0x0
+.text           0x0008002c       0xc0
  *(.text)
- .text          0x00080018        0x0 build/main.o
+ .text          0x0008002c        0x0 build/startup.o
+ .text          0x0008002c       0x4c build/main.o
+                0x0008002c                kmain
+ .text          0x00080078       0x74 build/gpio.o
+                0x00080078                gpio_set_output
+                0x000800bc                gpio_on
+                0x000800d4                gpio_off
 
-.data           0x00080018        0x0
+.data           0x000800ec        0x0
  *(.data)
- .data          0x00080018        0x0 build/main.o
+ .data          0x000800ec        0x0 build/startup.o
+ .data          0x000800ec        0x0 build/main.o
+ .data          0x000800ec        0x0 build/gpio.o
+
+.bss            0x000800ec        0x0
+                0x000800ec                        _bss_start = .
+ *(.bss)
+ .bss           0x000800ec        0x0 build/startup.o
+ .bss           0x000800ec        0x0 build/main.o
+ .bss           0x000800ec        0x0 build/gpio.o
+ *(COMMON)
+                0x000800ec                        _bss_end = .
 
 /DISCARD/
  *(*)

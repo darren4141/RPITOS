@@ -1,63 +1,56 @@
 ###############################################################################
-#	makefile
-#	 by Alex Chadwick
-#
-#	A makefile script for generation of raspberry pi kernel images.
+#	Makefile — rpitos
+#	Bare-metal RTOS for Raspberry Pi CM4 (BCM2711, Cortex-A72, AArch32)
 ###############################################################################
 
-# The toolchain to use. arm-none-eabi works, but there does exist 
-# arm-bcm2708-linux-gnueabi.
 ARMGNU ?= arm-none-eabi
 
-# The intermediate directory for compiled object files.
-BUILD = build/
+BUILD   = build/
+TARGET  = kernel7l.img
+LIST    = kernel.list
+MAP     = kernel.map
+LINKER  = kernel.ld
 
-# The directory in which source files are stored.
-SOURCE = source/
+# GCC flags for bare-metal Cortex-A72 AArch32
+CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall \
+         -Idrivers/inc -Iinc
 
-# The name of the output file to generate.
-TARGET = kernel7l.img
+# Source directories
+ASM_SRCS := $(wildcard startup/*.s)
+C_SRCS   := $(wildcard source/*.c) $(wildcard drivers/src/*.c)
 
-# The name of the assembler listing file to generate.
-LIST = kernel.list
+# Object files — all land flat in build/
+OBJECTS := $(patsubst startup/%.s,   $(BUILD)%.o, $(ASM_SRCS)) \
+           $(patsubst source/%.c,    $(BUILD)%.o, $(filter source/%, $(C_SRCS))) \
+           $(patsubst drivers/src/%.c, $(BUILD)%.o, $(filter drivers/src/%, $(C_SRCS)))
 
-# The name of the map file to generate.
-MAP = kernel.map
-
-# The name of the linker script to use.
-LINKER = kernel.ld
-
-# The names of all object files that must be generated. Deduced from the 
-# assembly code files in source.
-OBJECTS := $(patsubst $(SOURCE)%.s,$(BUILD)%.o,$(wildcard $(SOURCE)*.s))
-
-# Rule to make everything.
+# Rules
 all: $(TARGET) $(LIST)
 
-# Rule to remake everything. Does not include clean.
-rebuild: all
+rebuild: clean all
 
-# Rule to make the listing file.
-$(LIST) : $(BUILD)output.elf
+$(LIST): $(BUILD)output.elf
 	$(ARMGNU)-objdump -d $(BUILD)output.elf > $(LIST)
 
-# Rule to make the image file.
-$(TARGET) : $(BUILD)output.elf
-	$(ARMGNU)-objcopy $(BUILD)output.elf -O binary $(TARGET) 
+$(TARGET): $(BUILD)output.elf
+	$(ARMGNU)-objcopy $(BUILD)output.elf -O binary $(TARGET)
 
-# Rule to make the elf file.
-$(BUILD)output.elf : $(OBJECTS) $(LINKER)
+$(BUILD)output.elf: $(OBJECTS) $(LINKER)
 	$(ARMGNU)-ld --no-undefined $(OBJECTS) -Map $(MAP) -o $(BUILD)output.elf -T $(LINKER)
 
-# Rule to make the object files.
-$(BUILD)%.o: $(SOURCE)%.s $(BUILD)
-	$(ARMGNU)-as -I $(SOURCE) $< -o $@
+$(BUILD)%.o: startup/%.s | $(BUILD)
+	$(ARMGNU)-as $< -o $@
+
+$(BUILD)%.o: source/%.c | $(BUILD)
+	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD)%.o: drivers/src/%.c | $(BUILD)
+	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD):
-	mkdir $@
+	mkdir -p $(BUILD)
 
-# Rule to clean files.
-clean : 
+clean:
 	-rm -rf $(BUILD)
 	-rm -f $(TARGET)
 	-rm -f $(LIST)

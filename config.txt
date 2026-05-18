@@ -1,0 +1,2 @@
+arm_64bit=0
+kernel=kernel7l.img

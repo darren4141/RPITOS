@@ -22,7 +22,7 @@ SECTIONS {
 		*(.text)
 	}
 	
-	/* 
+	/*
 	* Next we put the data.
 	*/
 	.data : {
@@ -30,7 +30,18 @@ SECTIONS {
 	}
 
 	/*
-	* Finally comes everything else. A fun trick here is to put all other 
+	* Zero-initialised globals. Startup code zeroes this region before
+	* calling kmain. _bss_start and _bss_end are used by main.s.
+	*/
+	.bss : {
+		_bss_start = .;
+		*(.bss)
+		*(COMMON)
+		_bss_end = .;
+	}
+
+	/*
+	* Finally comes everything else. A fun trick here is to put all other
 	* sections into this section, which will be discarded by default.
 	*/
 	/DISCARD/ : {
