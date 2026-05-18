@@ -1,0 +1,15 @@
+
+build/output.elf:     file format elf32-littlearm
+
+
+Disassembly of section .init:
+
+00080000 <_start>:
+   80000:	e59f000c 	ldr	r0, [pc, #12]	@ 80014 <loop$+0x4>
+   80004:	e3a01001 	mov	r1, #1
+   80008:	e1a01901 	lsl	r1, r1, #18
+   8000c:	e5801004 	str	r1, [r0, #4]
+
+00080010 <loop$>:
+   80010:	eafffffe 	b	80010 <loop$>
+   80014:	fe200000 	.word	0xfe200000
