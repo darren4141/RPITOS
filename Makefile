@@ -13,16 +13,17 @@ LINKER  = kernel.ld
 
 # GCC flags for bare-metal Cortex-A72 AArch32
 CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall \
-         -Idrivers/inc -Iinc
+         -Idrivers/inc -Iinc -Ilibraries/inc
 
 # Source directories
 ASM_SRCS := $(wildcard startup/*.s)
-C_SRCS   := $(wildcard source/*.c) $(wildcard drivers/src/*.c)
+C_SRCS   := $(wildcard source/*.c) $(wildcard drivers/src/*.c) $(wildcard libraries/src/*.c)
 
 # Object files — all land flat in build/
 OBJECTS := $(patsubst startup/%.s,   $(BUILD)%.o, $(ASM_SRCS)) \
            $(patsubst source/%.c,    $(BUILD)%.o, $(filter source/%, $(C_SRCS))) \
            $(patsubst drivers/src/%.c, $(BUILD)%.o, $(filter drivers/src/%, $(C_SRCS)))
+           $(patsubst libraries/src/%.c, $(BUILD)%.o, $(filter libraries/src/%, $(C_SRCS)))
 
 # Rules
 all: $(TARGET) $(LIST)
@@ -47,6 +48,9 @@ $(BUILD)%.o: source/%.c | $(BUILD)
 $(BUILD)%.o: drivers/src/%.c | $(BUILD)
 	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
 
+$(BUILD)%.o: libraries/src/%.c | $(BUILD)
+	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
+
 $(BUILD):
 	mkdir -p $(BUILD)
 
@@ -55,3 +59,22 @@ clean:
 	-rm -f $(TARGET)
 	-rm -f $(LIST)
 	-rm -f $(MAP)
+
+# ── QEMU ─────────────────────────────────────────────────────────────────────
+# Requires: qemu-system-arm in PATH
+#   Windows:  winget install QEMU.QEMU   (then re-open terminal)
+#   macOS:    brew install qemu
+#   Linux:    sudo apt install qemu-system-arm
+#
+# -M raspi4b         : Raspberry Pi 4B machine (closest QEMU model to CM4)
+# -kernel            : raw binary image (kernel7l.img)
+# -serial stdio      : UART0 (PL011 @ 0xFE201000) → your terminal
+# -nographic         : no GUI window, everything in terminal
+# -d int             : log every CPU exception/interrupt taken
+# -D qemu.log        : write that log to qemu.log (open separately to read)
+#
+# Exit QEMU: Ctrl+A, then X
+QEMU = qemu-system-arm
+
+qemu: $(BUILD)output.elf
+	$(QEMU) -M raspi2b -kernel $(BUILD)output.elf -serial stdio -display none -monitor none -d int -D qemu.log

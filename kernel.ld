@@ -6,38 +6,47 @@
 ******************************************************************************/
 
 SECTIONS {
-	/*
-	* First and formost we need the .init section, containing the code to 
-        * be run first. We allow room for the ATAGs and stack and conform to 
-        * the bootloader's expectation by putting this code at 0x8000.
-	*/
-	.init 0x80000 : {
+	.init 0x8000 : {
 		*(.init)
 	}
 	
-	/* 
-	* Next we put the rest of the code.
-	*/
+	/* The rest of the code */
 	.text : {
+		. = ALIGN(4);
 		*(.text)
+        *(.text.*)		
 	}
 	
-	/*
-	* Next we put the data.
-	*/
+	/* Read-only data */
+    .rodata : {
+        . = ALIGN(4);
+        *(.rodata)
+        *(.rodata.*)
+    }
+
 	.data : {
+        . = ALIGN(4);
 		*(.data)
 	}
 
-	/*
-	* Zero-initialised globals. Startup code zeroes this region before
-	* calling kmain. _bss_start and _bss_end are used by main.s.
-	*/
+	/* Zero-initialised globals. Startup code zeroes this region before calling kmain */
 	.bss : {
+        . = ALIGN(4);
 		_bss_start = .;
 		*(.bss)
 		*(COMMON)
 		_bss_end = .;
+	}
+
+	/* Space for stacks */
+	.stacks (NOLOAD) : {
+		. = ALIGN(8);
+		_fiq_stack_bottom = .;  . += 0x200;  _fiq_stack_top = .;
+		_irq_stack_bottom = .;  . += 0x400;  _irq_stack_top = .;
+		_abt_stack_bottom = .;  . += 0x200;  _abt_stack_top = .;
+		_und_stack_bottom = .;  . += 0x200;  _und_stack_top = .;
+		_sys_stack_bottom = .;  . += 0x1000; _sys_stack_top = .;
+		_svc_stack_bottom = .;  . += 0x1000; _svc_stack_top = .;
 	}
 
 	/*

@@ -2,13 +2,22 @@
 Discarded input sections
 
  .ARM.attributes
-                0x00000000       0x12 build/startup.o
+                0x00000000       0x18 build/startup.o
  .comment       0x00000000       0x27 build/main.o
  .ARM.attributes
                 0x00000000       0x33 build/main.o
+ .comment       0x00000000       0x27 build/gentimer.o
+ .ARM.attributes
+                0x00000000       0x33 build/gentimer.o
+ .comment       0x00000000       0x27 build/gic.o
+ .ARM.attributes
+                0x00000000       0x33 build/gic.o
  .comment       0x00000000       0x27 build/gpio.o
  .ARM.attributes
                 0x00000000       0x33 build/gpio.o
+ .comment       0x00000000       0x27 build/interrupts.o
+ .ARM.attributes
+                0x00000000       0x33 build/interrupts.o
 
 Memory Configuration
 
@@ -19,37 +28,88 @@ Linker script and memory map
 
 LOAD build/startup.o
 LOAD build/main.o
+LOAD build/gentimer.o
+LOAD build/gic.o
 LOAD build/gpio.o
+LOAD build/interrupts.o
 
-.init           0x00080000       0x2c
+.init           0x00008000      0x16c
  *(.init)
- .init          0x00080000       0x2c build/startup.o
-                0x00080000                _start
+ .init          0x00008000      0x16c build/startup.o
+                0x00008000                _start
 
-.text           0x0008002c       0xc0
+.text           0x0000816c      0x1dc
+                0x0000816c                        . = ALIGN (0x4)
  *(.text)
- .text          0x0008002c        0x0 build/startup.o
- .text          0x0008002c       0x4c build/main.o
-                0x0008002c                kmain
- .text          0x00080078       0x74 build/gpio.o
-                0x00080078                gpio_set_output
-                0x000800bc                gpio_on
-                0x000800d4                gpio_off
+ .text          0x0000816c        0x0 build/startup.o
+ .text          0x0000816c       0xbc build/main.o
+                0x0000816c                kmain
+                0x000081a4                timer_tick_handler
+ .text          0x00008228       0x44 build/gentimer.o
+                0x00008228                gentimer_init
+ .text          0x0000826c       0x68 build/gic.o
+                0x0000826c                gic_init
+ .text          0x000082d4       0x74 build/gpio.o
+                0x000082d4                gpio_set_output
+                0x00008318                gpio_on
+                0x00008330                gpio_off
+ .text          0x00008348        0x0 build/interrupts.o
+ *(.text.*)
 
-.data           0x000800ec        0x0
+.rodata         0x00008348        0x0
+                0x00008348                        . = ALIGN (0x4)
+ *(.rodata)
+ *(.rodata.*)
+
+.data           0x00008348        0x1
+                0x00008348                        . = ALIGN (0x4)
  *(.data)
- .data          0x000800ec        0x0 build/startup.o
- .data          0x000800ec        0x0 build/main.o
- .data          0x000800ec        0x0 build/gpio.o
+ .data          0x00008348        0x0 build/startup.o
+ .data          0x00008348        0x1 build/main.o
+ .data          0x00008349        0x0 build/gentimer.o
+ .data          0x00008349        0x0 build/gic.o
+ .data          0x00008349        0x0 build/gpio.o
+ .data          0x00008349        0x0 build/interrupts.o
 
-.bss            0x000800ec        0x0
-                0x000800ec                        _bss_start = .
+.bss            0x0000834c        0xc
+                0x0000834c                        . = ALIGN (0x4)
+                0x0000834c                        _bss_start = .
  *(.bss)
- .bss           0x000800ec        0x0 build/startup.o
- .bss           0x000800ec        0x0 build/main.o
- .bss           0x000800ec        0x0 build/gpio.o
+ .bss           0x0000834c        0x0 build/startup.o
+ .bss           0x0000834c        0x8 build/main.o
+ .bss           0x00008354        0x4 build/gentimer.o
+ .bss           0x00008358        0x0 build/gic.o
+ .bss           0x00008358        0x0 build/gpio.o
+ .bss           0x00008358        0x0 build/interrupts.o
  *(COMMON)
-                0x000800ec                        _bss_end = .
+                0x00008358                        _bss_end = .
+
+.stacks         0x00008358     0x2a00
+                0x00008358                        . = ALIGN (0x8)
+                0x00008358                        _fiq_stack_bottom = .
+                0x00008558                        . = (. + 0x200)
+ *fill*         0x00008358      0x200 
+                0x00008558                        _fiq_stack_top = .
+                0x00008558                        _irq_stack_bottom = .
+                0x00008958                        . = (. + 0x400)
+ *fill*         0x00008558      0x400 
+                0x00008958                        _irq_stack_top = .
+                0x00008958                        _abt_stack_bottom = .
+                0x00008b58                        . = (. + 0x200)
+ *fill*         0x00008958      0x200 
+                0x00008b58                        _abt_stack_top = .
+                0x00008b58                        _und_stack_bottom = .
+                0x00008d58                        . = (. + 0x200)
+ *fill*         0x00008b58      0x200 
+                0x00008d58                        _und_stack_top = .
+                0x00008d58                        _sys_stack_bottom = .
+                0x00009d58                        . = (. + 0x1000)
+ *fill*         0x00008d58     0x1000 
+                0x00009d58                        _sys_stack_top = .
+                0x00009d58                        _svc_stack_bottom = .
+                0x0000ad58                        . = (. + 0x1000)
+ *fill*         0x00009d58     0x1000 
+                0x0000ad58                        _svc_stack_top = .
 
 /DISCARD/
  *(*)
