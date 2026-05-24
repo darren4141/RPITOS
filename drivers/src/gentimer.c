@@ -10,11 +10,22 @@ static void delay(uint32_t count)
   }
 }
 
+uint64_t read_cntpct(void)
+{
+  uint32_t lo, hi;
+  __asm__ volatile ("mrrc p15, 0, %0, %1, c14" : "=r" (lo), "=r" (hi));   // CNTPCT
+  return ((uint64_t)hi << 32) | lo;
+}
+
 /**
  * Uses the EL1 Physical timer, p15, c14
  */
-void gentimer_init(uint32_t *clk_freq, uint32_t hz)
+StatusCode gentimer_init(uint32_t *clk_freq, uint32_t hz)
 {
+
+  if (clk_freq == NULL) {
+    return E_INVALID_ARGS;
+  }
 
   // Read CNTFRQ as a sanity check but override with the known value.
   p_freq = clk_freq;
@@ -25,11 +36,7 @@ void gentimer_init(uint32_t *clk_freq, uint32_t hz)
   uint32_t ctl = 0;
   __asm__ volatile ("mcr p15, 0, %0, c14, c2, 1" : : "r" (ctl));    // CNTP_CTL = 0
 
-  // Read the compare value (CVAL)
-  uint32_t lo;
-  uint32_t hi;
-  __asm__ volatile ("mrrc p15, 0, %0, %1, c14" : "=r" (lo), "=r" (hi));   // CNTPCT
-  uint64_t current = ((uint64_t)hi << 32) | lo;
+  uint64_t current = read_cntpct();
 
   // Write the compare value (CVAL) (1-step ahead)
   uint64_t cval = current + (*p_freq / hz);
@@ -39,4 +46,6 @@ void gentimer_init(uint32_t *clk_freq, uint32_t hz)
 
   ctl = 0x1;                                                                      // bit0=ENABLE, bit1=IMASK(0=unmasked), bit2=ISTATUS(RO)
   __asm__ volatile ("mcr p15, 0, %0, c14, c2, 1" : : "r" (ctl));                  // CNTP_CTL
+
+  return E_OK;
 }

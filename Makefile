@@ -22,7 +22,7 @@ C_SRCS   := $(wildcard source/*.c) $(wildcard drivers/src/*.c) $(wildcard librar
 # Object files — all land flat in build/
 OBJECTS := $(patsubst startup/%.s,   $(BUILD)%.o, $(ASM_SRCS)) \
            $(patsubst source/%.c,    $(BUILD)%.o, $(filter source/%, $(C_SRCS))) \
-           $(patsubst drivers/src/%.c, $(BUILD)%.o, $(filter drivers/src/%, $(C_SRCS)))
+           $(patsubst drivers/src/%.c, $(BUILD)%.o, $(filter drivers/src/%, $(C_SRCS))) \
            $(patsubst libraries/src/%.c, $(BUILD)%.o, $(filter libraries/src/%, $(C_SRCS)))
 
 # Rules
@@ -36,8 +36,10 @@ $(LIST): $(BUILD)output.elf
 $(TARGET): $(BUILD)output.elf
 	$(ARMGNU)-objcopy $(BUILD)output.elf -O binary $(TARGET)
 
+LIBGCC := $(shell $(ARMGNU)-gcc $(CFLAGS) -print-libgcc-file-name)
+
 $(BUILD)output.elf: $(OBJECTS) $(LINKER)
-	$(ARMGNU)-ld --no-undefined $(OBJECTS) -Map $(MAP) -o $(BUILD)output.elf -T $(LINKER)
+	$(ARMGNU)-ld --no-undefined $(OBJECTS) -Map $(MAP) -o $(BUILD)output.elf -T $(LINKER) $(LIBGCC)
 
 $(BUILD)%.o: startup/%.s | $(BUILD)
 	$(ARMGNU)-as $< -o $@

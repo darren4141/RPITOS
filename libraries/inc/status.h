@@ -1,4 +1,9 @@
-enum {
-  EOK   = 0,
-  ENULL = 1
+#ifndef STATUS_H
+#define STATUS_H
+
+typedef enum {
+  E_OK           = 0,
+  E_INVALID_ARGS = 1
 } StatusCode;
+
+#endif
