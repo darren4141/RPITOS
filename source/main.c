@@ -2,6 +2,9 @@
 #include "gentimer.h"
 #include "gic.h"
 #include "gpio.h"
+#include "scheduler.h"
+#include "task.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -27,6 +30,8 @@ void kmain(void)
   gentimer_init(&clk_freq, hz);
   delay_init(&clk_freq);
   __asm__ volatile ("cpsie i" ::: "memory");
+
+  scheduler_init();
 
   while (1) {
     __asm__ volatile ("nop");
