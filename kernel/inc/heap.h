@@ -3,5 +3,6 @@
 
 #include <stdint.h>
 
+void *heap_malloc(uint32_t size);
 
 #endif

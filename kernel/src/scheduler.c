@@ -13,25 +13,25 @@ StatusCode scheduler_init()
   return E_OK;
 }
 
-StatusCode addToReadyList(TaskControlBlock *tcb)
+StatusCode addToReadyList(TaskControlBlock **tcb)
 {
-  if ((tcb == NULL) || (tcb->priority >= NUM_TASK_PRIORITIES)) {
+  if ((tcb == NULL) || (*tcb == NULL) || ((*tcb)->priority >= NUM_TASK_PRIORITIES)) {
     return E_INVALID_ARGS;
   }
 
-  TaskControlBlock *idx = ready_list[tcb->priority];
+  TaskControlBlock *idx = ready_list[(*tcb)->priority];
 
   if (idx == NULL) {
-    ready_list[tcb->priority] = tcb;
-    tcb->prev = NULL;
+    ready_list[(*tcb)->priority] = (*tcb);
+    (*tcb)->prev = NULL;
   }
   else {
     while (idx->next != NULL) {
       idx = idx->next;
     }
 
-    idx->next = tcb;
-    tcb->prev = idx;
+    idx->next = (*tcb);
+    (*tcb)->prev = idx;
   }
 
   return E_OK;
@@ -39,9 +39,28 @@ StatusCode addToReadyList(TaskControlBlock *tcb)
 
 void schedulerSwitchContext(void)
 {
+  // Mark current task as READY
+  if (p_task_control_block != NULL) {
+    p_task_control_block->currentState = TASK_STATE_READY;
+  }
+
   for (int i = NUM_TASK_PRIORITIES - 1; i >= 0; i--) {
     if (ready_list[i] != NULL) {
       p_task_control_block = ready_list[i];
+
+      // Rotate the ready list if there are 2+ tasks at this priority:
+
+      if (p_task_control_block->next != NULL) {
+        TaskControlBlock *last = p_task_control_block->next;
+        while (last->next != NULL) {
+          last = last->next;
+        }
+        ready_list[i] = p_task_control_block->next;
+        p_task_control_block->next = NULL;
+        last->next = p_task_control_block;
+      }
+
+      p_task_control_block->currentState = TASK_STATE_RUNNING;
       return;
     }
   }

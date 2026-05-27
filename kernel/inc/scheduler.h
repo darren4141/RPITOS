@@ -4,10 +4,16 @@
 #include "status.h"
 #include "task_types.h"
 
+extern TaskControlBlock *p_task_control_block;
+
 StatusCode scheduler_init();
 
-StatusCode addToReadyList(TaskControlBlock *tcb);
+StatusCode schedulerStart(void);
+
+StatusCode addToReadyList(TaskControlBlock **tcb);
 
 void schedulerSwitchContext();
+
+void startFirstTask(void);   // defined in startup.s
 
 #endif

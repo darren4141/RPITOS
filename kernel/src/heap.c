@@ -5,7 +5,7 @@
 static uint8_t heap[HEAP_SIZE_BYTES];
 static uint32_t heapOffset = 0;
 
-static void *heap_malloc(uint32_t size)
+void *heap_malloc(uint32_t size)
 {
   size = (size + 3) & ~0b11;
 
