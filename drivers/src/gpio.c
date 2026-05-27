@@ -1,7 +1,5 @@
 #include "gpio.h"
 
-#define GPIO_BASE 0xFE200000UL
-
 void gpio_set_output(uint32_t pin)
 {
   uint32_t reg = pin / 10;
