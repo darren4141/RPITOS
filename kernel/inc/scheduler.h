@@ -8,4 +8,6 @@ StatusCode scheduler_init();
 
 StatusCode addToReadyList(TaskControlBlock *tcb);
 
+void schedulerSwitchContext();
+
 #endif

@@ -2,6 +2,8 @@
 
 static TaskControlBlock *ready_list[NUM_TASK_PRIORITIES];
 
+TaskControlBlock *p_task_control_block = NULL;    // global — visible to assembly
+
 StatusCode scheduler_init()
 {
   for (int i = 0; i < NUM_TASK_PRIORITIES; i++) {
@@ -31,6 +33,28 @@ StatusCode addToReadyList(TaskControlBlock *tcb)
     idx->next = tcb;
     tcb->prev = idx;
   }
+
+  return E_OK;
+}
+
+void schedulerSwitchContext(void)
+{
+  for (int i = NUM_TASK_PRIORITIES - 1; i >= 0; i--) {
+    if (ready_list[i] != NULL) {
+      p_task_control_block = ready_list[i];
+      return;
+    }
+  }
+}
+
+StatusCode schedulerStart(void)
+{
+  schedulerSwitchContext();
+  if (p_task_control_block == NULL) {
+    return E_EMPTY;
+  }
+
+  startFirstTask();
 
   return E_OK;
 }

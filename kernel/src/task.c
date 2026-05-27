@@ -4,44 +4,22 @@ static uint16_t taskCounter = 0;
 
 static StackType_t *initializeTaskStack(StackType_t *topOfStack, TaskFunction_t taskFunction, void *taskParams)
 {
-  *topOfStack = 0x01000000;   // xPSR  — Thumb bit set
+  // SPSR — SVC mode, interrupts enabled, Thumb or ARM
+  *topOfStack = 0x00000013;      // SVC mode, ARM state, IRQs enabled
   topOfStack--;
 
+  // PC — task entry point
   *topOfStack = (StackType_t)taskFunction;
   topOfStack--;
 
-  *topOfStack = (StackType_t)prvTaskExitTrap;
-  topOfStack--;
+  // R12 down to R1 — all zero
+  for (int i = 12; i >= 1; i--) {
+    *topOfStack = 0;
+    topOfStack--;
+  }
 
-  *topOfStack = 0;                       // R12
-  topOfStack--;
-
-  *topOfStack = 0;                       // R3
-  topOfStack--;
-  *topOfStack = 0;                       // R2
-  topOfStack--;
-  *topOfStack = 0;                       // R1
-  topOfStack--;
-
-  *topOfStack = (StackType_t)taskParams; // R0   — task argument
-  topOfStack--;
-
-  // software-saved registers (PendSV pushes these manually)
-  *topOfStack = 0;                       // R11
-  topOfStack--;
-  *topOfStack = 0;                       // R10
-  topOfStack--;
-  *topOfStack = 0;                       // R9
-  topOfStack--;
-  *topOfStack = 0;                       // R8
-  topOfStack--;
-  *topOfStack = 0;                       // R7
-  topOfStack--;
-  *topOfStack = 0;                       // R6
-  topOfStack--;
-  *topOfStack = 0;                       // R5
-  topOfStack--;
-  *topOfStack = 0;                       // R4
+  // R0 — task argument
+  *topOfStack = (StackType_t)taskParams;
 
   return topOfStack;
 }
