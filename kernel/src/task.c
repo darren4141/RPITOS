@@ -4,6 +4,10 @@ static uint16_t taskCounter = 0;
 
 static StackType_t *initializeTaskStack(StackType_t *topOfStack, TaskFunction_t taskFunction, void *taskParams)
 {
+  // SPSR — SVC mode, interrupts enabled, Thumb or ARM
+  *topOfStack = 0x00000013;      // SVC mode, ARM state, IRQs enabled
+  topOfStack--;
+
   // PC — task entry point
   *topOfStack = (StackType_t)taskFunction;
   topOfStack--;
@@ -16,10 +20,6 @@ static StackType_t *initializeTaskStack(StackType_t *topOfStack, TaskFunction_t 
 
   // R0 — task argument
   *topOfStack = (StackType_t)taskParams;
-  topOfStack--;
-
-  // SPSR — SVC mode, interrupts enabled, Thumb or ARM
-  *topOfStack = 0x00000013;      // SVC mode, ARM state, IRQs enabled
 
   return topOfStack;
 }

@@ -114,14 +114,16 @@ _fiq_handler:       b _fiq_handler
 
 _irq_handler:
     sub lr, lr, #4
-    push {r0-r12, lr}
 
-    mrs r0, spsr
-    push {r0}
+    @ Push {lr_irq, SPSR_irq} to the SVC stack (sp_svc) while in IRQ mode
+    srsdb sp!, #0x13             @ sp_svc -= 8; [sp_svc] = lr_irq, [sp_svc+4] = SPSR_irq
+
+    cps  #0x13                   @ switch to SVC mode (sp = sp_svc = task's own stack)
+    push {r0-r12}                @ save r0–r12 on task's SVC stack
+
 
     ldr r0, =0xFF842000     @ GICC base addr
     ldr r1, [r0, #0x0C]     @ GICC_IAR ACK, get id
-
     mov  r4, r1                  @ save IAR in callee-saved register
 
     @ Extract and check interrupt ID (bits [9:0])
@@ -146,9 +148,13 @@ cntx_switch$:
     ldr r1, [r0]
     str sp, [r1, #0]    @ Save task A's SP
 
-    bl timer_tick_handler
 
+    @ Use IRQ stack for C handlers (keeps task's SVC stack clean)
+    cps  #0x12                   @ switch to IRQ mode
+    bl timer_tick_handler
     bl schedulerSwitchContext
+
+    cps  #0x13                   @ back to SVC mode
     ldr r0, =p_task_control_block
     ldr r1, [r0]
     ldr sp, [r1, #0]    @ Load task B's SP
@@ -159,10 +165,8 @@ irq_eoi$:
     str  r4, [r0, #0x10]         @ GICC_EOIR — end of interrupt
 
 irq_done$:
-    pop  {r0}
-    msr  SPSR_cxsf, R0
-    pop  {r0-r12, lr}
-    movs pc, lr                  @ return, restoring CPSR from SPSR
+    pop  {r0-r12}
+    rfeia sp!
 
 
 _secondary_hang$:
@@ -174,7 +178,5 @@ startFirstTask:
     ldr     r1, [r0]                @ R1 = first TCB
     ldr     sp, [r1, #0]            @ SP = pxTopOfStack
 
-    pop     {r0}
-    msr     SPSR_cxsf, r0           @ restore SPSR
-    pop     {r0-r12, lr}
-    movs    pc, lr                  @ jump into first task
+    pop     {r0-r12}
+    rfeia   sp!
