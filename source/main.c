@@ -4,6 +4,7 @@
 #include "gpio.h"
 #include "scheduler.h"
 #include "task.h"
+#include "uart.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -23,14 +24,19 @@ static void delay(uint32_t count)
 
 void kmain(void)
 {
+  uart_print("Starting main...\r\n");
   gpio_set_function(16, GPIO_FUNC_OUTPUT);
   gpio_on(16);
 
+  uart_print("Initializing GIC...\r\n");
   gic_init();
+
+  uart_print("Initializing General Timer...\r\n");
   gentimer_init(&clk_freq, hz);
   delay_init(&clk_freq);
   __asm__ volatile ("cpsie i" ::: "memory");
 
+  uart_print("Initializing Scheduler...\r\n");
   scheduler_init();
 
   while (1) {
