@@ -173,6 +173,7 @@ _secondary_hang$:
     wfe
     b _secondary_hang$
 
+.globl startFirstTask
 startFirstTask:
     ldr     r0, =p_task_control_block
     ldr     r1, [r0]                @ R1 = first TCB

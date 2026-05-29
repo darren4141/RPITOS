@@ -50,8 +50,10 @@ typedef struct {
 
 #define GPIO ((GPIORegs_t *)GPIO_BASE)
 
-void gpio_set_output(uint32_t pin);
+void gpio_set_function(uint32_t pin, GPIOFunc_t funct);
+void gpio_set_pull(uint8_t pin, GPIOPull_t pull);
 void gpio_on(uint32_t pin);
 void gpio_off(uint32_t pin);
+uint8_t gpio_read(uint32_t pin);
 
 #endif

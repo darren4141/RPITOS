@@ -13,17 +13,18 @@ LINKER  = kernel.ld
 
 # GCC flags for bare-metal Cortex-A72 AArch32
 CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall \
-         -Idrivers/inc -Iinc -Ilibraries/inc
+         -Idrivers/inc -Iinc -Ilibraries/inc -Ikernel/inc
 
 # Source directories
 ASM_SRCS := $(wildcard startup/*.s)
-C_SRCS   := $(wildcard source/*.c) $(wildcard drivers/src/*.c) $(wildcard libraries/src/*.c)
+C_SRCS   := $(wildcard source/*.c) $(wildcard drivers/src/*.c) $(wildcard libraries/src/*.c) $(wildcard kernel/src/*.c)
 
 # Object files — all land flat in build/
 OBJECTS := $(patsubst startup/%.s,   $(BUILD)%.o, $(ASM_SRCS)) \
            $(patsubst source/%.c,    $(BUILD)%.o, $(filter source/%, $(C_SRCS))) \
            $(patsubst drivers/src/%.c, $(BUILD)%.o, $(filter drivers/src/%, $(C_SRCS))) \
-           $(patsubst libraries/src/%.c, $(BUILD)%.o, $(filter libraries/src/%, $(C_SRCS)))
+           $(patsubst libraries/src/%.c, $(BUILD)%.o, $(filter libraries/src/%, $(C_SRCS))) \
+           $(patsubst kernel/src/%.c, $(BUILD)%.o, $(filter kernel/src/%, $(C_SRCS)))
 
 # Rules
 all: $(TARGET) $(LIST)
@@ -51,6 +52,9 @@ $(BUILD)%.o: drivers/src/%.c | $(BUILD)
 	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD)%.o: libraries/src/%.c | $(BUILD)
+	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD)%.o: kernel/src/%.c | $(BUILD)
 	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD):

@@ -23,7 +23,7 @@ static void delay(uint32_t count)
 
 void kmain(void)
 {
-  gpio_set_output(16);
+  gpio_set_function(16, GPIO_FUNC_OUTPUT);
   gpio_on(16);
 
   gic_init();

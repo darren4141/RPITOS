@@ -1,9 +1,12 @@
-#ifndef GPIO_H
-#define GPIO_H
+#ifndef UART_H
+#define UART_H
 
 #include <stdint.h>
 
-#define UART_BASE        0xFE201000UL
+#include "gpio.h"
+#include "status.h"
+
+#define UART0_BASE       0xFE201000UL
 
 typedef struct {
   volatile uint32_t DR;           // 0x00 — data register (TX/RX)
@@ -53,6 +56,20 @@ typedef struct {
 #define UART_IBRD_115200 26
 #define UART_FBRD_115200 3
 
+typedef enum {
+  UART_BAUDRATE_115200
+} UartBaudrate;
+
 #define UART0            ((PL011Regs_t *)UART0_BASE)
+
+#define UART_BUFFER_SIZE 256
+
+StatusCode uart_init(UartBaudrate baudrate);
+void uart_tx(uint8_t byte);
+uint8_t uart_rx(uint8_t byte);
+StatusCode uart_rx_nonblocking(uint8_t *out);
+void uart_print(const char *str);
+void uart_printf(const char *fmt, ...);
+
 
 #endif

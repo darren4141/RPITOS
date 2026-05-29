@@ -1,5 +1,7 @@
 #include "task.h"
 
+#include <stddef.h>
+
 static uint16_t taskCounter = 0;
 
 static StackType_t *initializeTaskStack(StackType_t *topOfStack, TaskFunction_t taskFunction, void *taskParams)

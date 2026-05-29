@@ -1,5 +1,7 @@
 #include "scheduler.h"
 
+#include <stddef.h>
+
 static TaskControlBlock *ready_list[NUM_TASK_PRIORITIES];
 
 TaskControlBlock *p_task_control_block = NULL;    // global — visible to assembly

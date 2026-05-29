@@ -1,5 +1,7 @@
 #include "heap.h"
 
+#include <stddef.h>
+
 #define HEAP_SIZE_BYTES 8192
 
 static uint8_t heap[HEAP_SIZE_BYTES];
