@@ -63,15 +63,17 @@ void __attribute__((noinline)) timer_tick_handler(void)
   uint32_t new_hi = (uint32_t)(cval >> 32);
   __asm__ volatile ("mcrr p15, 2, %0, %1, c14" : : "r" (new_lo), "r" (new_hi)); // CNTP_CVAL write
 
-  // tick_count++;
-  // if (tick_count > 500) {
-  // tick_count = 0;
-  // gpio_state = !gpio_state;
-  // if (gpio_state) {
-  // gpio_on(16);
-  // }
-  // else {
-  // gpio_off(16);
-  // }
-  // }
+  tick_count++;
+  if (tick_count > 500) {
+    tick_count = 0;
+    gpio_state = !gpio_state;
+    if (gpio_state) {
+      uart_print("Blink!\r\n");
+      gpio_on(16);
+    }
+    else {
+      uart_print("Blink!\r\n");
+      gpio_off(16);
+    }
+  }
 }
