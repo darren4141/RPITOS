@@ -2,8 +2,7 @@
 #include "gentimer.h"
 #include "gic.h"
 #include "gpio.h"
-#include "scheduler.h"
-#include "task.h"
+#include "uart.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -23,15 +22,19 @@ static void delay(uint32_t count)
 
 void kmain(void)
 {
-  gpio_set_output(16);
+  uart_init(UART_BAUDRATE_115200);
+
+  uart_print("Starting main...\r\n");
+  gpio_set_function(16, GPIO_FUNC_OUTPUT);
   gpio_on(16);
 
+  uart_print("Initializing GIC...\r\n");
   gic_init();
+
+  uart_print("Initializing General Timer...\r\n");
   gentimer_init(&clk_freq, hz);
   delay_init(&clk_freq);
   __asm__ volatile ("cpsie i" ::: "memory");
-
-  scheduler_init();
 
   while (1) {
     __asm__ volatile ("nop");
@@ -57,15 +60,17 @@ void __attribute__((noinline)) timer_tick_handler(void)
   uint32_t new_hi = (uint32_t)(cval >> 32);
   __asm__ volatile ("mcrr p15, 2, %0, %1, c14" : : "r" (new_lo), "r" (new_hi)); // CNTP_CVAL write
 
-  // tick_count++;
-  // if (tick_count > 500) {
-  // tick_count = 0;
-  // gpio_state = !gpio_state;
-  // if (gpio_state) {
-  // gpio_on(16);
-  // }
-  // else {
-  // gpio_off(16);
-  // }
-  // }
+  tick_count++;
+  if (tick_count > 500) {
+    tick_count = 0;
+    gpio_state = !gpio_state;
+    if (gpio_state) {
+      uart_print("Blink!\r\n");
+      gpio_on(16);
+    }
+    else {
+      uart_print("Blink!\r\n");
+      gpio_off(16);
+    }
+  }
 }
