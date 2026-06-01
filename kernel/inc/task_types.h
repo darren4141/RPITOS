@@ -37,7 +37,7 @@ typedef struct TaskControlBlock {
 
   TaskState currentState;
   TaskPriorityLevel priority;
-  uint64_t ticksToWait;
+  uint64_t wakeup_time;
 
   struct TaskControlBlock *next;
   struct TaskControlBlock *prev;

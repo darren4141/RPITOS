@@ -2,7 +2,7 @@
 
 #include <stddef.h>
 
-#define HEAP_SIZE_BYTES 8192
+#define HEAP_SIZE_BYTES 16384
 
 static uint8_t heap[HEAP_SIZE_BYTES];
 static uint32_t heapOffset = 0;

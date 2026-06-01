@@ -1,4 +1,5 @@
 #include "task.h"
+#include "uart.h"
 
 #include <stddef.h>
 
@@ -45,11 +46,13 @@ StatusCode task_create(TaskFunction_t taskFunction, uint16_t stack_depth, TaskPr
 
   *p_task_control_block = heap_malloc(sizeof(TaskControlBlock));
   if (*p_task_control_block == NULL) {
+    uart_print("Could not create task, out of stack space!");
     return E_OUT_OF_MEM;
   }
 
   (*p_task_control_block)->p_Stack = heap_malloc(sizeof(StackType_t) * stack_depth);
   if ((*p_task_control_block)->p_Stack == NULL) {
+    uart_print("Could not create task, out of stack space!");
     return E_OUT_OF_MEM;
   }
 
@@ -65,7 +68,7 @@ StatusCode task_create(TaskFunction_t taskFunction, uint16_t stack_depth, TaskPr
   (*p_task_control_block)->p_EndOfStack = (*p_task_control_block)->p_Stack + stack_depth - 1;
 
   (*p_task_control_block)->currentState = TASK_STATE_READY;
-  (*p_task_control_block)->ticksToWait = 0U;
+  (*p_task_control_block)->wakeup_time = 0U;
 
   // initialize stack
   (*p_task_control_block)->p_TopOfStack = initializeTaskStack((*p_task_control_block)->p_EndOfStack, taskFunction, taskParams);

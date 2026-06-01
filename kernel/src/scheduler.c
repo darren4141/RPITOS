@@ -2,7 +2,11 @@
 
 #include <stddef.h>
 
+#include "uart.h"
+
 static TaskControlBlock *ready_list[NUM_TASK_PRIORITIES];
+
+static TaskControlBlock *blocked_task_list = NULL;
 
 TaskControlBlock *p_task_control_block = NULL;    // global — visible to assembly
 
@@ -79,3 +83,18 @@ StatusCode schedulerStart(void)
 
   return E_OK;
 }
+
+// void task_delay(uint64_t ticks)
+// {
+// uint64_t wakeup_time = read_cntpct() + ticks;
+
+// TaskControlBlock *blocked_task_list_iter = blocked_task_list;
+
+// if (blocked_task_list_iter == NULL) {
+// blocked_task_list = p_task_control_block;
+// }
+// else {
+// while (blocked_task_list->wakeup_time < wakeup_time) {
+// }
+// }
+// }
