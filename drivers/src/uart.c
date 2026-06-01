@@ -1,8 +1,21 @@
+#include "task_types.h"
 #include "uart.h"
 
 #include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
 
-StatusCode uart_init(UartBaudrate baudrate)
+#include "task.h"
+
+static volatile uint8_t uart_buf[UART_BUFFER_SIZE];
+static volatile uint16_t p_uart_buf_left = 0;
+static volatile uint16_t p_uart_buf_right = 0;
+
+static TaskControlBlock *uart_tcb = NULL;
+
+static void uart_tx_raw(uint8_t byte);
+
+static StatusCode uart_hw_init(UartBaudrate baudrate)
 {
   gpio_set_function(14, GPIO_FUNC_ALT0);
   gpio_set_function(15, GPIO_FUNC_ALT0);
@@ -42,11 +55,48 @@ StatusCode uart_init(UartBaudrate baudrate)
   return E_OK;
 }
 
-void uart_tx(uint8_t byte)
+void uart_tx_task(void *params)
+{
+  while (1) {
+    if (p_uart_buf_right != p_uart_buf_left) {
+      p_uart_buf_left++;
+      if (p_uart_buf_left >= UART_BUFFER_SIZE) {
+        p_uart_buf_left = 0;
+      }
+      uart_tx_raw(uart_buf[p_uart_buf_left]);
+    }
+  }
+}
+
+StatusCode uart_init(UartBaudrate baudrate)
+{
+  StatusCode ret = uart_hw_init(baudrate);
+  if (ret != E_OK) {
+    return ret;
+  }
+  ret = task_create(uart_tx_task, 512, TASK_PRIORITY_5, NULL, &uart_tcb);
+  if (ret != E_OK) {
+    return ret;
+  }
+
+  return E_OK;
+}
+
+void uart_tx_raw(uint8_t byte)
 {
   while (UART0->FR & FR_TXFF) {
   }
   UART0->DR = byte;
+}
+
+void uart_tx(uint8_t byte)
+{
+  uint16_t next = p_uart_buf_right + 1;
+  if (next >= UART_BUFFER_SIZE) {
+    next = 0;
+  }
+  uart_buf[next] = byte;     // write before making slot visible
+  p_uart_buf_right = next;
 }
 
 uint8_t uart_rx(uint8_t byte)
@@ -67,9 +117,11 @@ StatusCode uart_rx_nonblocking(uint8_t *out)
 
 void uart_print(const char *str)
 {
+  __asm__ volatile ("cpsid i" ::: "memory");
   while (*str) {
     uart_tx((uint8_t)*str++);
   }
+  __asm__ volatile ("cpsie i" ::: "memory");
 }
 
 static void print_uint(uint32_t n, uint32_t base, const char *digits)
@@ -94,6 +146,7 @@ static void print_uint(uint32_t n, uint32_t base, const char *digits)
 
 void uart_printf(const char *fmt, ...)
 {
+  __asm__ volatile ("cpsid i" ::: "memory");
   va_list args;
   va_start(args, fmt);
 
@@ -152,4 +205,5 @@ void uart_printf(const char *fmt, ...)
   }
 
   va_end(args);
+  __asm__ volatile ("cpsie i" ::: "memory");
 }

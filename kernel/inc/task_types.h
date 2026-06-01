@@ -27,7 +27,7 @@ typedef enum {
 typedef uint32_t StackType_t;
 typedef void (*TaskFunction_t)(void *);
 
-typedef struct {
+typedef struct TaskControlBlock {
   volatile StackType_t *p_TopOfStack;
   StackType_t *p_EndOfStack;
   StackType_t *p_Stack;
@@ -36,12 +36,11 @@ typedef struct {
   uint16_t taskId;
 
   TaskState currentState;
-  // TaskPriorityLevel base_priority;
   TaskPriorityLevel priority;
-  uint64_t ticksToWait;
+  uint64_t wakeup_time;
 
-  TaskControlBlock *next;
-  TaskControlBlock *prev;
+  struct TaskControlBlock *next;
+  struct TaskControlBlock *prev;
 } TaskControlBlock;
 
 #endif

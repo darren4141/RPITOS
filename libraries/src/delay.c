@@ -12,11 +12,15 @@ StatusCode delay_init(uint32_t *clk_freq)
   return E_OK;
 }
 
-void delay_ms(uint32_t ms)
+void delay(uint64_t ticks)
 {
   uint64_t start = read_cntpct();
 
-  uint64_t ticks = ((uint64_t)(*p_freq) * ms) / 1000ULL;
-
   while ((read_cntpct() - start) < ticks) {}
+}
+
+void delay_ms(uint32_t ms)
+{
+  uint64_t ticks = ((uint64_t)(*p_freq) * ms) / 1000ULL;
+  delay(ticks);
 }
