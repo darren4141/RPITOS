@@ -8,6 +8,7 @@
 
 StatusCode delay_init(uint32_t *clk_freq);
 
+void delay(uint64_t ticks);
 void delay_ms(uint32_t ms);
 
 #endif
