@@ -35,7 +35,7 @@ typedef struct TaskControlBlock {
 
   uint16_t taskId;
 
-  TaskState currentState;
+  volatile TaskState currentState;
   TaskPriorityLevel priority;
   uint64_t wakeup_time;
 

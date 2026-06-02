@@ -1,26 +1,22 @@
 #include "delay.h"
 
-static uint32_t *p_freq;
+#include <stddef.h>
 
-StatusCode delay_init(uint32_t *clk_freq)
+static volatile uint64_t *s_tick_count;
+
+StatusCode delay_init(volatile uint64_t *p_tick_count)
 {
-  if (clk_freq == NULL) {
+  if (p_tick_count == NULL) {
     return E_INVALID_ARGS;
   }
-  p_freq = clk_freq;
+  s_tick_count = p_tick_count;
 
   return E_OK;
 }
 
-void delay(uint64_t ticks)
+void delay_ms(uint64_t ticks)
 {
-  uint64_t start = read_cntpct();
+  uint64_t start = *s_tick_count;
 
-  while ((read_cntpct() - start) < ticks) {}
-}
-
-void delay_ms(uint32_t ms)
-{
-  uint64_t ticks = ((uint64_t)(*p_freq) * ms) / 1000ULL;
-  delay(ticks);
+  while ((*s_tick_count - start) < ticks) {}
 }
