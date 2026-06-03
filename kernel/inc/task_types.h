@@ -24,10 +24,29 @@ typedef enum {
   TASK_STATE_DELETED
 } TaskState;
 
+// Forward declarations — all three structs reference each other via pointers
+typedef struct List List;
+typedef struct ListItem ListItem;
+typedef struct TaskControlBlock TaskControlBlock;
+
 typedef uint32_t StackType_t;
 typedef void (*TaskFunction_t)(void *);
 
-typedef struct TaskControlBlock {
+struct List {
+  uint16_t num_items;
+  ListItem *head;
+  ListItem *index;
+  ListItem *list_end;
+};
+
+struct ListItem {
+  ListItem *next;
+  ListItem *prev;
+  TaskControlBlock *owner;
+  List *container;
+};
+
+struct TaskControlBlock {
   volatile StackType_t *p_TopOfStack;
   StackType_t *p_EndOfStack;
   StackType_t *p_Stack;
@@ -39,8 +58,8 @@ typedef struct TaskControlBlock {
   TaskPriorityLevel priority;
   uint64_t wakeup_time;
 
-  struct TaskControlBlock *next;
-  struct TaskControlBlock *prev;
-} TaskControlBlock;
+  ListItem state_list_item;
+  ListItem event_list_item;
+};
 
 #endif

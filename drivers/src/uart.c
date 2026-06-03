@@ -74,7 +74,7 @@ StatusCode uart_init(UartBaudrate baudrate)
   if (ret != E_OK) {
     return ret;
   }
-  ret = task_create(uart_tx_task, 512, TASK_PRIORITY_4, NULL, &uart_tcb);
+  ret = task_create(uart_tx_task, 512, TASK_PRIORITY_2, NULL, &uart_tcb);
   if (ret != E_OK) {
     return ret;
   }

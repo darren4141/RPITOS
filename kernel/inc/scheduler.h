@@ -18,6 +18,8 @@ void schedulerSwitchContext();
 
 void task_delay_ms(uint64_t ticks);
 
+void task_delay_until_ms(uint64_t *wake_time, uint64_t ticks);
+
 void startFirstTask(void);   // defined in startup.s
 
 #endif

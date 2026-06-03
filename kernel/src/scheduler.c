@@ -4,9 +4,9 @@
 
 #include "uart.h"
 
-static TaskControlBlock *ready_list[NUM_TASK_PRIORITIES];
+static List ready_list[NUM_TASK_PRIORITIES];
 
-static TaskControlBlock *blocked_task_list = NULL;
+static List blocked_task_list;
 
 TaskControlBlock *p_task_control_block = NULL;    // global — visible to assembly
 
@@ -27,59 +27,90 @@ StatusCode scheduler_init(volatile uint32_t *p_clk_freq, uint32_t new_hz, volati
   *s_tick_count = 0;
 
   for (int i = 0; i < NUM_TASK_PRIORITIES; i++) {
-    ready_list[i] = NULL;
+    ready_list[i].head = NULL;
+    ready_list[i].index = NULL;
+    ready_list[i].list_end = NULL;
+    ready_list[i].num_items = 0;
   }
+
+  blocked_task_list.head = NULL;
+  blocked_task_list.index = NULL;
+  blocked_task_list.list_end = NULL;
+  blocked_task_list.num_items = 0;
 
   return E_OK;
 }
 
-// Adds a task to the back of the ready list of it's respective priority
+// Adds a task to the back of the ready list of its respective priority
 StatusCode addToReadyList(TaskControlBlock **tcb)
 {
   if ((tcb == NULL) || (*tcb == NULL) || ((*tcb)->priority >= NUM_TASK_PRIORITIES)) {
     return E_INVALID_ARGS;
   }
 
-  TaskControlBlock **idx = &ready_list[(*tcb)->priority];
+  List *list = &ready_list[(*tcb)->priority];
+  ListItem *item = &(*tcb)->state_list_item;
 
-  if (*idx == NULL) {
-    ready_list[(*tcb)->priority] = (*tcb);
-    (*tcb)->prev = NULL;
+  item->owner = *tcb;
+  item->container = list;
+  item->next = NULL;
+  item->prev = list->list_end;
+
+  if (list->list_end != NULL) {
+    list->list_end->next = item;
   }
   else {
-    while ((*idx)->next != NULL) {
-      idx = &(*idx)->next;
-    }
-
-    (*idx)->next = (*tcb);
-    (*tcb)->prev = (*idx);
+    list->head = item;       // first item — becomes head and current runner
+    list->index = item;
   }
 
-  (*tcb)->next = NULL;
+  list->list_end = item;
+  list->num_items++;
+
   (*tcb)->currentState = TASK_STATE_READY;
 
   return E_OK;
 }
 
-// Removes a task from the ready list of it's respective priority. Caller is responsible for setting tcb->next to a new value
+// Removes a task from the ready list of its respective priority
 StatusCode removeFromReadyList(TaskControlBlock **tcb)
 {
   if ((tcb == NULL) || (*tcb == NULL) || ((*tcb)->priority >= NUM_TASK_PRIORITIES)) {
     return E_INVALID_ARGS;
   }
 
-  TaskControlBlock **idx = &ready_list[(*tcb)->priority];
+  ListItem *item = &(*tcb)->state_list_item;
+  List *list = item->container;
 
-  while (*idx != NULL && (*idx)->taskId != (*tcb)->taskId) {
-    idx = &(*idx)->next;
+  if ((list == NULL) || (list != &ready_list[(*tcb)->priority])) {
+    return E_INVALID_ARGS;   // not in the ready list
   }
 
-  if (*idx == NULL) {
-    return E_INVALID_ARGS;   // Task is not in the ready list
+  // Stitch the linked list
+  if (item->prev != NULL) {
+    item->prev->next = item->next;
+  }
+  else {
+    list->head = item->next;      // item was the head
   }
 
-  *idx = (*tcb)->next;
-  (*tcb)->next = NULL;
+  if (item->next != NULL) {
+    item->next->prev = item->prev;
+  }
+  else {
+    list->list_end = item->prev;   // item was the tail
+  }
+
+  // Advance index if the running task is the one being removed
+  if (list->index == item) {
+    list->index = (item->next != NULL) ? item->next : list->head;
+  }
+
+  list->num_items--;
+
+  item->next = NULL;
+  item->prev = NULL;
+  item->container = NULL;
 
   return E_OK;
 }
@@ -87,31 +118,24 @@ StatusCode removeFromReadyList(TaskControlBlock **tcb)
 // Scheduler performs a context switch, round-robin, highest priority takes precedence
 void schedulerSwitchContext(void)
 {
-  // Mark current task as READY
+  // If the current task used its quantum (not blocked), mark READY and advance
+  // the round-robin index so the next task at the same priority runs next tick
   if ((p_task_control_block != NULL) && (p_task_control_block->currentState == TASK_STATE_RUNNING)) {
     p_task_control_block->currentState = TASK_STATE_READY;
+    List *list = &ready_list[p_task_control_block->priority];
+    list->index = (list->index->next != NULL) ? list->index->next : list->head;
   }
 
+  // Pick the highest-priority non-empty list and run its index task
   for (int i = NUM_TASK_PRIORITIES - 1; i >= 0; i--) {
-    if (ready_list[i] != NULL) {
-      p_task_control_block = ready_list[i];
-
-      // Rotate the ready list if there are 2+ tasks at this priority:
-
-      if (p_task_control_block->next != NULL) {
-        TaskControlBlock *last = p_task_control_block->next;
-        while (last->next != NULL) {
-          last = last->next;
-        }
-        ready_list[i] = p_task_control_block->next;
-        p_task_control_block->next = NULL;
-        last->next = p_task_control_block;
-      }
-
+    if (ready_list[i].num_items > 0) {
+      p_task_control_block = ready_list[i].index->owner;
       p_task_control_block->currentState = TASK_STATE_RUNNING;
       return;
     }
   }
+
+  p_task_control_block = NULL;
 }
 
 // Start the scheduler by performing a context switch and starting the first task
@@ -127,40 +151,59 @@ StatusCode schedulerStart(void)
   return E_OK;
 }
 
-// Blocking delay, task is blocked and added to the blocked task list
-void task_delay_ms(uint64_t ticks)
+static void block_until(uint64_t wakeup_time)
 {
   volatile TaskControlBlock *my_tcb = p_task_control_block;
-  uint64_t wakeup_time = *s_tick_count + ticks;
-
-  removeFromReadyList(&p_task_control_block);
-  p_task_control_block->next = NULL;
   p_task_control_block->wakeup_time = wakeup_time;
 
-  TaskControlBlock **blocked_task_list_iter = &blocked_task_list;
+  removeFromReadyList(&p_task_control_block);
 
-  if ((*blocked_task_list_iter) == NULL) {
-    blocked_task_list = p_task_control_block;
+  ListItem *item = &p_task_control_block->state_list_item;
+  item->owner = p_task_control_block;
+  item->container = &blocked_task_list;
+  item->next = NULL;
+  item->prev = NULL;
+
+  if (blocked_task_list.head == NULL) {
+    blocked_task_list.head = item;
+    blocked_task_list.list_end = item;
+  }
+  else if (wakeup_time <= blocked_task_list.head->owner->wakeup_time) {
+    item->next = blocked_task_list.head;
+    blocked_task_list.head->prev = item;
+    blocked_task_list.head = item;
   }
   else {
-    if ((*blocked_task_list_iter)->wakeup_time > wakeup_time) {
-      p_task_control_block->next = (*blocked_task_list_iter);
-      blocked_task_list = p_task_control_block;
+    ListItem *iter = blocked_task_list.head;
+    while (iter->next != NULL && iter->next->owner->wakeup_time <= wakeup_time) {
+      iter = iter->next;
+    }
+    item->next = iter->next;
+    item->prev = iter;
+    if (iter->next != NULL) {
+      iter->next->prev = item;
     }
     else {
-      // Loop until the next task in the list is NULL or larger than our task
-      while ((*blocked_task_list_iter)->next != NULL && (*blocked_task_list_iter)->next->wakeup_time < wakeup_time) {
-        blocked_task_list_iter = &(*blocked_task_list_iter)->next;
-      }
-      p_task_control_block->next = (*blocked_task_list_iter)->next;
-      (*blocked_task_list_iter)->next = p_task_control_block;
+      blocked_task_list.list_end = item;
     }
+    iter->next = item;
   }
 
+  blocked_task_list.num_items++;
   p_task_control_block->currentState = TASK_STATE_BLOCKED;
 
-  // Spin for the rest of the tick so we don't return to the task's loop
   while (my_tcb->currentState == TASK_STATE_BLOCKED) {}
+}
+
+void task_delay_ms(uint64_t ticks)
+{
+  block_until(*s_tick_count + ticks);
+}
+
+void task_delay_until_ms(uint64_t *last_wake_time, uint64_t period)
+{
+  block_until(*last_wake_time + period);
+  *last_wake_time += period;
 }
 
 // Scheduler tick handler, resets timer, increments global tick_count, and checks to unblock tasks
@@ -179,11 +222,25 @@ void __attribute__((noinline)) timer_tick_handler(void)
 
   (*s_tick_count)++;
 
-  while ((blocked_task_list != NULL) && (*s_tick_count >= blocked_task_list->wakeup_time)) {
-    uart_printf("%d task ready!\r\n", blocked_task_list->taskId);
-    TaskControlBlock *new_blocked_task_list_head = blocked_task_list->next;
-    addToReadyList(&blocked_task_list);
-    blocked_task_list = new_blocked_task_list_head;
+  while (blocked_task_list.head != NULL && *s_tick_count >= blocked_task_list.head->owner->wakeup_time) {
+    TaskControlBlock *tcb = blocked_task_list.head->owner;
+
+    // Pop the head
+    blocked_task_list.head = blocked_task_list.head->next;
+    if (blocked_task_list.head != NULL) {
+      blocked_task_list.head->prev = NULL;
+    }
+    else {
+      blocked_task_list.list_end = NULL;
+    }
+    blocked_task_list.num_items--;
+
+    // Clear item links so addToReadyList can re-use the state_list_item
+    tcb->state_list_item.next = NULL;
+    tcb->state_list_item.prev = NULL;
+    tcb->state_list_item.container = NULL;
+
+    addToReadyList(&tcb);
   }
 
   if ((*s_tick_count % 5000) == 0) {

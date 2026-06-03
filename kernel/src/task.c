@@ -73,8 +73,15 @@ StatusCode task_create(TaskFunction_t taskFunction, uint16_t stack_depth, TaskPr
   // initialize stack
   (*p_task_control_block)->p_TopOfStack = initializeTaskStack((*p_task_control_block)->p_EndOfStack, taskFunction, taskParams);
 
-  (*p_task_control_block)->next = NULL;
-  (*p_task_control_block)->prev = NULL;
+  (*p_task_control_block)->state_list_item.owner = *p_task_control_block;
+  (*p_task_control_block)->state_list_item.container = NULL;
+  (*p_task_control_block)->state_list_item.next = NULL;
+  (*p_task_control_block)->state_list_item.prev = NULL;
+
+  (*p_task_control_block)->event_list_item.owner = *p_task_control_block;
+  (*p_task_control_block)->event_list_item.container = NULL;
+  (*p_task_control_block)->event_list_item.next = NULL;
+  (*p_task_control_block)->event_list_item.prev = NULL;
 
   addToReadyList(p_task_control_block);
 
