@@ -7,7 +7,9 @@ typedef enum {
   E_OUT_OF_MEM         = 2,
   E_RESOURCE_EXHAUSTED = 3,
   E_EMPTY              = 4,
-  E_TIMED_OUT          = 5
+  E_TIMED_OUT          = 5,
+  E_CORRUPTED          = 6,
+  E_ABORTED            = 7,
 } StatusCode;
 
 #endif

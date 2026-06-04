@@ -66,7 +66,7 @@ typedef enum {
 
 StatusCode uart_init(UartBaudrate baudrate);
 void uart_tx(uint8_t byte);
-uint8_t uart_rx(uint8_t byte);
+uint8_t uart_rx();
 StatusCode uart_rx_nonblocking(uint8_t *out);
 void uart_print(const char *str);
 void uart_printf(const char *fmt, ...);

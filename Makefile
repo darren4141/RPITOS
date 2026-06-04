@@ -62,9 +62,61 @@ $(BUILD):
 
 clean:
 	-rm -rf $(BUILD)
-	-rm -f $(TARGET)
+	-rm -f $(TARGET) $(BOOT_TARGET)
 	-rm -f $(LIST)
 	-rm -f $(MAP)
+
+# ── Bootloader ────────────────────────────────────────────────────────────────
+BOOT_BUILD  = build/boot/
+BOOT_TARGET = boot7l.img
+BOOT_LINKER = boot.ld
+
+BOOT_CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall \
+              -Iboot/inc -Idrivers/inc -Ikernel/inc -Ilibraries/inc \
+              -DUART_MINIMAL
+
+BOOT_C_SRCS := boot/app/main.c \
+               $(wildcard boot/src/*.c) \
+               drivers/src/gpio.c \
+               drivers/src/crc.c \
+               drivers/src/emmc.c \
+               drivers/src/uart.c \
+               libraries/src/boot_flags.c
+
+BOOT_ASM_SRCS := boot/startup.s
+
+BOOT_OBJECTS := $(patsubst boot/%.s,           $(BOOT_BUILD)%.o, $(BOOT_ASM_SRCS)) \
+                $(patsubst boot/app/%.c,       $(BOOT_BUILD)%.o, $(filter boot/app/%, $(BOOT_C_SRCS))) \
+                $(patsubst boot/src/%.c,       $(BOOT_BUILD)%.o, $(filter boot/src/%, $(BOOT_C_SRCS))) \
+                $(patsubst drivers/src/%.c,    $(BOOT_BUILD)%.o, $(filter drivers/src/%, $(BOOT_C_SRCS))) \
+                $(patsubst libraries/src/%.c,  $(BOOT_BUILD)%.o, $(filter libraries/src/%, $(BOOT_C_SRCS)))
+
+boot: $(BOOT_TARGET)
+
+$(BOOT_TARGET): $(BOOT_BUILD)boot.elf
+	$(ARMGNU)-objcopy $(BOOT_BUILD)boot.elf -O binary $(BOOT_TARGET)
+
+$(BOOT_BUILD)boot.elf: $(BOOT_OBJECTS) $(BOOT_LINKER) | $(BOOT_BUILD)
+	$(ARMGNU)-ld --no-undefined $(BOOT_OBJECTS) -Map $(BOOT_BUILD)boot.map \
+	    -o $(BOOT_BUILD)boot.elf -T $(BOOT_LINKER) $(LIBGCC)
+
+$(BOOT_BUILD)%.o: boot/%.s | $(BOOT_BUILD)
+	$(ARMGNU)-as $< -o $@
+
+$(BOOT_BUILD)%.o: boot/app/%.c | $(BOOT_BUILD)
+	$(ARMGNU)-gcc $(BOOT_CFLAGS) -c $< -o $@
+
+$(BOOT_BUILD)%.o: boot/src/%.c | $(BOOT_BUILD)
+	$(ARMGNU)-gcc $(BOOT_CFLAGS) -c $< -o $@
+
+$(BOOT_BUILD)%.o: drivers/src/%.c | $(BOOT_BUILD)
+	$(ARMGNU)-gcc $(BOOT_CFLAGS) -c $< -o $@
+
+$(BOOT_BUILD)%.o: libraries/src/%.c | $(BOOT_BUILD)
+	$(ARMGNU)-gcc $(BOOT_CFLAGS) -c $< -o $@
+
+$(BOOT_BUILD):
+	mkdir -p $(BOOT_BUILD)
 
 # ── QEMU ─────────────────────────────────────────────────────────────────────
 # Requires: qemu-system-arm in PATH

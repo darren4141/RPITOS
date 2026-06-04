@@ -1,5 +1,5 @@
 SECTIONS {
-	.init 0x88400 : {
+	.init 0x8000 : {
 		*(.init)
 	}
 
@@ -20,7 +20,6 @@ SECTIONS {
 		*(.data)
 	}
 
-	/* Zero-initialised globals. Startup code zeroes this region before calling kmain */
 	.bss : {
 		. = ALIGN(4);
 		_bss_start = .;
@@ -29,7 +28,6 @@ SECTIONS {
 		_bss_end = .;
 	}
 
-	/* Space for stacks */
 	.stacks (NOLOAD) : {
 		. = ALIGN(8);
 		_fiq_stack_bottom = .;  . += 0x200;  _fiq_stack_top = .;
@@ -40,7 +38,10 @@ SECTIONS {
 		_svc_stack_bottom = .;  . += 0x1000; _svc_stack_top = .;
 	}
 
-	/* Shared flags — must match boot.ld exactly */
+	ASSERT(. <= 0x88000, "Bootloader exceeds 512 KB reserved region")
+
+	/* Shared flags — 1024 bytes of RAM shared between bootloader and kernel.
+	   Both images agree on 0x88000–0x88400; no data is emitted here. */
 	.shared_flags (NOLOAD) : {
 		. = 0x88000;
 		_shared_flags_start = .;
