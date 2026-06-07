@@ -1,0 +1,8 @@
+#ifndef MEMORY_MAP_H
+#define MEMORY_MAP_H
+
+#define BOOTLOADER_START_ADDR 0x8000
+#define BOOT_FLAGS_START_ADDR 0x88000
+#define APP_START_ADDR        0x88400
+
+#endif

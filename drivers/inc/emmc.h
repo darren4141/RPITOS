@@ -3,34 +3,29 @@
 
 #include <stdint.h>
 
-#define SECTOR_SIZE             512
-
-#define EMMC_OK                 0
-#define EMMC_ERR_TIMEOUT        -1
-#define EMMC_ERR_CMD            -2
-#define EMMC_ERR_DATA           -3
-#define EMMC_ERR_CRC            -4
+#define SECTOR_SIZE                 512
+#define BYTES_TO_SECTORS(x) ((x) + SECTOR_SIZE - 1) / SECTOR_SIZE
 
 // eMMC sector layout
-#define EMMC_SECTOR_VIDEOCORE   0            // sector 0-2047: VideoCore files
+#define EMMC_SECTOR_VIDEOCORE       0        // sector 0-2047: VideoCore files
                                              // DO NOT TOUCH — GPU needs these
-#define EMMC_SECTOR_BOOTLOADER  2048         // sector 2048+: your kernel8.img
-#define EMMC_SECTOR_APP         4096         // sector 4096+: app binary
-#define EMMC_SECTOR_METADATA    8192         // sector 8192+: firmware metadata
-#define EMMC_SECTOR_DFU_BUFFER  8256         // sector 8256+: scratch space
+#define EMMC_SECTOR_BOOTLOADER      2048     // sector 2048+: your kernel8.img
+#define EMMC_SECTOR_APP             4096     // sector 4096+: app binary
+#define EMMC_SECTOR_METADATA        8192     // sector 8192+: firmware metadata
+#define EMMC_SECTOR_DFU_BUFFER      8256     // sector 8256+: scratch space
 
 // sizes (in sectors)
-#define EMMC_SECTORS_BOOTLOADER 512          // 256KB for bootloader
-#define EMMC_SECTORS_APP        16384        // 8MB for app
-#define EMMC_SECTORS_METADATA   1            // 512 bytes, one sector
-#define EMMC_SECTORS_DFU_BUFFER 16384        // 8MB scratch space
+#define EMMC_SECTOR_SIZE_BOOTLOADER 512      // 256KB for bootloader
+#define EMMC_SECTOR_SIZE_APP        16384    // 8MB for app
+#define EMMC_SECTOR_SIZE_METADATA   1        // 512 bytes, one sector
+#define EMMC_SECTOR_SIZE_DFU_BUFFER 16384    // 8MB scratch space
 
 // byte addresses (for documentation)
-#define EMMC_BYTE_VIDEOCORE     (EMMC_SECTOR_VIDEOCORE * SECTOR_SIZE)
-#define EMMC_BYTE_APP           (EMMC_SECTOR_APP * SECTOR_SIZE)
-#define EMMC_BYTE_METADATA      (EMMC_SECTOR_METADATA * SECTOR_SIZE)
+#define EMMC_BYTE_VIDEOCORE         (EMMC_SECTOR_VIDEOCORE * SECTOR_SIZE)
+#define EMMC_BYTE_APP               (EMMC_SECTOR_APP * SECTOR_SIZE)
+#define EMMC_BYTE_METADATA          (EMMC_SECTOR_METADATA * SECTOR_SIZE)
 
-#define EMMC2_BASE              0xFE340000
+#define EMMC2_BASE                  0xFE340000
 
 typedef struct {
   uint32_t ARG2;            // 0x00  ACMD23 argument
@@ -154,10 +149,8 @@ static volatile EMMC2Regs_t * const pxEMMC =
 #define ACMD6               (CMD_INDEX(6) | CMD_RESP_48 | CMD_CRCCHK_EN | CMD_IXCHK_EN)
 #define CMD55               (CMD_INDEX(55) | CMD_RESP_48 | CMD_CRCCHK_EN | CMD_IXCHK_EN)
 
-#define SECTOR_SIZE         512
-
-int emmcInit( void );
-int emmcReadBlocks( uint32_t ulSector, void *pvBuf, uint32_t ulCount );
-int emmcWriteBlocks( uint32_t ulSector, const void *pvBuf, uint32_t ulCount );
+int emmc_init( void );
+int emmc_read_blocks( uint32_t ulSector, void *pvBuf, uint32_t ulCount );
+int emmc_write_blocks( uint32_t ulSector, const void *pvBuf, uint32_t ulCount );
 
 #endif

@@ -16,12 +16,12 @@ static void delayMicros(uint32_t us)
   while (i--) {}
 }
 
-static int blockingWaitInterrupt(uint32_t ulMask, uint32_t ulTimeoutMs)
+static StatusCode blockingWaitInterrupt(uint32_t ulMask, uint32_t ulTimeoutMs)
 {
   uint32_t ulCount = ulTimeoutMs * 1000;
   while (!(pxEMMC->INTERRUPT & ulMask)) {
     if (--ulCount == 0) {
-      return EMMC_ERR_TIMEOUT;
+      return E_TIMED_OUT;
     }
     delayMicros(1);
   }
@@ -29,30 +29,30 @@ static int blockingWaitInterrupt(uint32_t ulMask, uint32_t ulTimeoutMs)
   if (pxEMMC->INTERRUPT & INT_ERROR_MASK) {
     uint32_t ulErr = pxEMMC->INTERRUPT & INT_ERROR_MASK;
     pxEMMC->INTERRUPT = ulErr;
-    return EMMC_ERR_CMD;
+    return E_CMD;
   }
 
   pxEMMC->INTERRUPT = ulMask;
-  return EMMC_OK;
+  return E_OK;
 }
 
-static int blockingWaitStatus( uint32_t ulMask, uint32_t ulTimeoutMs )
+static StatusCode blockingWaitStatus( uint32_t ulMask, uint32_t ulTimeoutMs )
 {
   uint32_t ulCount = ulTimeoutMs * 1000;
   while (pxEMMC->STATUS & ulMask) {
     if (--ulCount == 0) {
-      return EMMC_ERR_TIMEOUT;
+      return E_TIMED_OUT;
     }
     delayMicros( 1 );
   }
-  return EMMC_OK;
+  return E_OK;
 }
 
-static int sdSetClock(uint32_t ulHz)
+static StatusCode sdSetClock(uint32_t ulHz)
 {
   // wait for lines to be free
   if (blockingWaitStatus(STATUS_CMD_INHIBIT | STATUS_DAT_INHIBIT, 2000) != EMMC_OK) {
-    return EMMC_ERR_TIMEOUT;
+    return E_TIMED_OUT;
   }
 
   // disable SD clock
@@ -82,7 +82,7 @@ static int sdSetClock(uint32_t ulHz)
   uint32_t ulCount = 2000;
   while (!(pxEMMC->CONTROL1 & CTRL1_CLK_STABLE)) {
     if (--ulCount == 0) {
-      return EMMC_ERR_TIMEOUT;
+      return E_TIMED_OUT;
     }
     delayMicros(1);
   }
@@ -90,49 +90,49 @@ static int sdSetClock(uint32_t ulHz)
   // enable SD clock
   pxEMMC->CONTROL1 |= CTRL1_CLK_EN;
   delayMicros(20);
-  return EMMC_OK;
+  return E_OK;
 }
 
-static int sdSendCommand( uint32_t ulCmd, uint32_t ulArg )
+static StatusCode sdSendCommand( uint32_t ulCmd, uint32_t ulArg )
 {
   // clear interrupt flags
   pxEMMC->INTERRUPT = 0xFFFFFFFF;
 
   // wait for command line free
-  if (waitStatus( STATUS_CMD_INHIBIT, 2000 ) != EMMC_OK) {
-    return EMMC_ERR_TIMEOUT;
+  if (blockingWaitStatus( STATUS_CMD_INHIBIT, 2000 ) != E_OK) {
+    return E_TIMED_OUT;
   }
 
   pxEMMC->ARG1 = ulArg;
   pxEMMC->CMDTM = ulCmd;
 
   // wait for command complete
-  int xRet = waitInterrupt( INT_CMD_DONE, 2000 );
-  if (xRet != EMMC_OK) {
+  int xRet = blockingWaitInterrupt( INT_CMD_DONE, 2000 );
+  if (xRet != E_OK) {
     return xRet;
   }
 
-  return EMMC_OK;
+  return E_OK;
 }
 
-static int sdSendACMD( uint32_t ulCmd, uint32_t ulArg )
+static StatusCode sdSendACMD( uint32_t ulCmd, uint32_t ulArg )
 {
   // ACMD = CMD55 followed by the app command
   int xRet = sdSendCommand( CMD55, ulRCA << 16 );
-  if (xRet != EMMC_OK) {
+  if (xRet != E_OK) {
     return xRet;
   }
   return sdSendCommand( ulCmd, ulArg );
 }
 
-int emmcInit(void)
+StatusCode emmc_init(void)
 {
   pxEMMC->CONTROL1 |= CTRL1_SRST_HC;
   uint32_t ulCount = 10000;
   while (pxEMMC->CONTROL1 & CTRL1_SRST_HC) {
     if (--ulCount == 0) {
       uart_print( "emmc: reset timeout\r\n" );
-      return EMMC_ERR_TIMEOUT;
+      return E_TIMED_OUT;
     }
     delayMicros(1);
   }
@@ -146,9 +146,9 @@ int emmcInit(void)
   pxEMMC->IRPT_EN = 0x00000000;      // no IRQ, polling only
 
   // set clock to 400KHz for identification
-  if (sdSetClock( 400000 ) != EMMC_OK) {
+  if (sdSetClock( 400000 ) != E_OK) {
     uart_print( "emmc: clock init failed\r\n" );
-    return EMMC_ERR_TIMEOUT;
+    return E_TIMED_OUT;
   }
 
   // CMD0 — go idle
@@ -171,7 +171,7 @@ int emmcInit(void)
     ulOCR = pxEMMC->RESP0;
     if (--ulCount == 0) {
       uart_print( "emmc: ACMD41 timeout\r\n" );
-      return EMMC_ERR_TIMEOUT;
+      return E_TIMED_OUT;
     }
     delayMicros( 1000 );
   } while (!(ulOCR & (1 << 31)));
@@ -193,19 +193,19 @@ int emmcInit(void)
   pxEMMC->CONTROL0 |= (1 << 1);      // set host to 4 bit mode
 
   // switch to high speed clock
-  if (sdSetClock( 25000000 ) != EMMC_OK) {
+  if (sdSetClock( 25000000 ) != E_OK) {
     uart_print( "emmc: high speed clock failed\r\n" );
-    return EMMC_ERR_TIMEOUT;
+    return E_TIMED_OUT;
   }
 
   uart_print( "emmc successfully initialized\r\n" );
-  return EMMC_OK;
+  return E_OK;
 }
 
-int emmcReadBlocks( uint32_t ulSector, void *pvBuf, uint32_t ulCount )
+int emmc_read_blocks( uint32_t ulSector, void *pvBuf, uint32_t ulCount )
 {
   if (ulCount == 0) {
-    return EMMC_OK;
+    return E_OK;
   }
 
   // byte address for standard capacity, sector address for HC
@@ -216,12 +216,12 @@ int emmcReadBlocks( uint32_t ulSector, void *pvBuf, uint32_t ulCount )
   if (ulCount == 1) {
     // single block read — CMD17
     pxEMMC->BLKSIZECNT = (1 << 16) | SECTOR_SIZE;
-    if (sdSendCommand( CMD17, ulArg ) != EMMC_OK) {
-      return EMMC_ERR_CMD;
+    if (sdSendCommand( CMD17, ulArg ) != E_OK) {
+      return E_CMD;
     }
 
-    if (waitInterrupt( INT_READ_RDY, 2000 ) != EMMC_OK) {
-      return EMMC_ERR_TIMEOUT;
+    if (blockingWaitInterrupt( INT_READ_RDY, 2000 ) != E_OK) {
+      return E_TIMED_OUT;
     }
 
     for (uint32_t i = 0; i < SECTOR_SIZE / 4; i++) {
@@ -231,13 +231,13 @@ int emmcReadBlocks( uint32_t ulSector, void *pvBuf, uint32_t ulCount )
   else {
     // multi block read — CMD18
     pxEMMC->BLKSIZECNT = (ulCount << 16) | SECTOR_SIZE;
-    if (sdSendCommand( CMD18, ulArg ) != EMMC_OK) {
-      return EMMC_ERR_CMD;
+    if (sdSendCommand( CMD18, ulArg ) != E_OK) {
+      return E_CMD;
     }
 
     for (uint32_t block = 0; block < ulCount; block++) {
-      if (waitInterrupt( INT_READ_RDY, 2000 ) != EMMC_OK) {
-        return EMMC_ERR_TIMEOUT;
+      if (blockingWaitInterrupt( INT_READ_RDY, 2000 ) != E_OK) {
+        return E_TIMED_OUT;
       }
 
       for (uint32_t i = 0; i < SECTOR_SIZE / 4; i++) {
@@ -246,18 +246,18 @@ int emmcReadBlocks( uint32_t ulSector, void *pvBuf, uint32_t ulCount )
     }
   }
 
-  if (waitInterrupt( INT_DATA_DONE, 2000 ) != EMMC_OK) {
-    return EMMC_ERR_TIMEOUT;
+  if (blockingWaitInterrupt( INT_DATA_DONE, 2000 ) != E_OK) {
+    return E_TIMED_OUT;
   }
 
-  return EMMC_OK;
+  return E_OK;
 }
 
 
-int emmcWriteBlocks( uint32_t ulSector, const void *pvBuf, uint32_t ulCount )
+int emmc_write_blocks( uint32_t ulSector, const void *pvBuf, uint32_t ulCount )
 {
   if (ulCount == 0) {
-    return EMMC_OK;
+    return E_OK;
   }
 
   uint32_t ulArg = xIsHC ? ulSector : ulSector * SECTOR_SIZE;
@@ -267,12 +267,12 @@ int emmcWriteBlocks( uint32_t ulSector, const void *pvBuf, uint32_t ulCount )
   if (ulCount == 1) {
     // single block write — CMD24
     pxEMMC->BLKSIZECNT = (1 << 16) | SECTOR_SIZE;
-    if (sdSendCommand( CMD24, ulArg ) != EMMC_OK) {
-      return EMMC_ERR_CMD;
+    if (sdSendCommand( CMD24, ulArg ) != E_OK) {
+      return E_CMD;
     }
 
-    if (waitInterrupt( INT_WRITE_RDY, 2000 ) != EMMC_OK) {
-      return EMMC_ERR_TIMEOUT;
+    if (blockingWaitInterrupt( INT_WRITE_RDY, 2000 ) != E_OK) {
+      return E_TIMED_OUT;
     }
 
     for (uint32_t i = 0; i < SECTOR_SIZE / 4; i++) {
@@ -282,13 +282,13 @@ int emmcWriteBlocks( uint32_t ulSector, const void *pvBuf, uint32_t ulCount )
   else {
     // multi block write — CMD25
     pxEMMC->BLKSIZECNT = (ulCount << 16) | SECTOR_SIZE;
-    if (sdSendCommand( CMD25, ulArg ) != EMMC_OK) {
-      return EMMC_ERR_CMD;
+    if (sdSendCommand( CMD25, ulArg ) != E_OK) {
+      return E_CMD;
     }
 
     for (uint32_t block = 0; block < ulCount; block++) {
-      if (waitInterrupt( INT_WRITE_RDY, 2000 ) != EMMC_OK) {
-        return EMMC_ERR_TIMEOUT;
+      if (blockingWaitInterrupt( INT_WRITE_RDY, 2000 ) != E_OK) {
+        return E_TIMED_OUT;
       }
 
       for (uint32_t i = 0; i < SECTOR_SIZE / 4; i++) {
@@ -297,14 +297,14 @@ int emmcWriteBlocks( uint32_t ulSector, const void *pvBuf, uint32_t ulCount )
     }
   }
 
-  if (waitInterrupt( INT_DATA_DONE, 5000 ) != EMMC_OK) {
-    return EMMC_ERR_TIMEOUT;
+  if (blockingWaitInterrupt( INT_DATA_DONE, 5000 ) != E_OK) {
+    return E_TIMED_OUT;
   }
 
   // wait for card to finish programming
-  if (waitStatus( STATUS_DAT_ACTIVE, 5000 ) != EMMC_OK) {
-    return EMMC_ERR_TIMEOUT;
+  if (blockingWaitStatus( STATUS_DAT_ACTIVE, 5000 ) != E_OK) {
+    return E_TIMED_OUT;
   }
 
-  return EMMC_OK;
+  return E_OK;
 }

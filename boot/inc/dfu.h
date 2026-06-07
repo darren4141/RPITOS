@@ -45,6 +45,12 @@ typedef struct DFU_Packet {
   uint32_t CRC;
 } DFU_Packet;
 
+typedef struct StartPacket {
+  uint16_t version_num;
+  uint16_t app_length;
+  uint32_t crc;
+} StartPacket;
+
 StatusCode dfu_init();
 StatusCode dfu_receive();
 

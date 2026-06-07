@@ -1,7 +1,10 @@
 #ifndef BOOT_H
 #define BOOT_H
 
-void boot_loadApp();
+#include "status.h"
+
+StatusCode boot_init();
+StatusCode boot_loadApp();
 void boot_jumpToApp();
 
 #endif

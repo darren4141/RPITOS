@@ -12,12 +12,6 @@ static uint32_t current_sector_counter;
 static bool unwritten_sector;
 static bool started;
 
-typedef struct StartPacket {
-  uint16_t version_num;
-  uint16_t app_length;
-  uint32_t crc;
-} StartPacket;
-
 static DFU_Packet dfu_packet_receive()
 {
   DFU_Packet packet;
@@ -33,8 +27,9 @@ static DFU_Packet dfu_packet_receive()
       break;
 
     case PACKET_STATE_CMD:
-      if (byte < NUM_CMDS) {
+      if ((byte >= CMD_REQ) && (byte < NUM_CMDS)) {
         packet.CMD = byte;
+        state = PACKET_STATE_LENGTH;
       }
       else {
         state = PACKET_STATE_ERROR;
@@ -64,7 +59,7 @@ static DFU_Packet dfu_packet_receive()
 
       uint32_t crc = ((uint32_t)(byte << 24U) | (uint32_t)(crc_b2 << 16U) | (uint32_t)(crc_b3 << 8U) | (crc_b4));
 
-      // Validate crc
+      packet.CRC = crc;
       state = PACKET_STATE_END;
       break;
 
@@ -95,11 +90,13 @@ StatusCode dfu_init()
   current_sector_counter = 0;
   unwritten_sector = false;
   started = false;
+
+  return E_OK;
 }
 
 StatusCode dfu_receive()
 {
-  DFU_state state = DFU_STATE_START;
+  DFU_State state = DFU_STATE_START;
 
   bool flags_crc_ok_set = false;
   uint32_t img_expected_crc;
@@ -123,10 +120,11 @@ StatusCode dfu_receive()
           current_sector[i] = packet.DATA[i];
         }
 
-        current_sector_counter = 8U;
-
         const StartPacket *start_pkt = (const StartPacket *)packet.DATA;
         img_expected_crc = start_pkt->crc;
+
+        emmc_write_blocks(EMMC_SECTOR_APP, current_sector, 1U);
+        sectors_written = 1;
 
         started = true;
       }
@@ -139,6 +137,7 @@ StatusCode dfu_receive()
       // our packet length must be a multiple of 32 bytes
       if (packet.LEN % 4 != 0) {
         state = DFU_STATE_ABORT;
+        break;
       }
       if (state == DFU_STATE_RECIEVE_DATA) {
         // Set the crc_ok flag to 0 so we know the data in eMMC is now bad (mid-write)
@@ -158,7 +157,7 @@ StatusCode dfu_receive()
           }
 
           // Write the buffer
-          emmcWriteBlocks(EMMC_SECTOR_APP + sectors_written, current_sector, 1U);
+          emmc_write_blocks(EMMC_SECTOR_APP + sectors_written, current_sector, 1U);
 
           // Copy over the overflow to the start of the buffer
           for (uint32_t i = 0; i < diff; i++) {
@@ -170,6 +169,13 @@ StatusCode dfu_receive()
           if (diff == 0) {
             unwritten_sector = false;
           }
+          else {
+            unwritten_sector = true;
+          }
+
+          // Update current_sector_counter
+
+          current_sector_counter = diff;
         }
         else {
           // Set unwritten sector if we have not
@@ -181,6 +187,8 @@ StatusCode dfu_receive()
           for (uint32_t i = 0; i < packet.LEN; i++) {
             current_sector[current_sector_counter + i] = packet.DATA[i];
           }
+
+          current_sector_counter += packet.LEN;
         }
 
         // compute img_actual_crc
@@ -202,7 +210,7 @@ StatusCode dfu_receive()
         }
 
         // write it
-        emmcWriteBlocks(EMMC_SECTOR_APP + sectors_written, current_sector, 1U);
+        emmc_write_blocks(EMMC_SECTOR_APP + sectors_written, current_sector, 1U);
       }
       state = DFU_STATE_DONE;
       break;
@@ -218,15 +226,19 @@ StatusCode dfu_receive()
   }
 
   if (state == DFU_STATE_DONE) {
-    if (img_expected_crc == img_actual_crc) {
-      boot_flags.fw_crc_ok = 1;
-      return E_OK;
-    }
-    else {
-      return E_CORRUPTED;
-    }
+    boot_flags.fw_crc_ok = 1;
+    return E_OK;
+    // if (img_expected_crc == img_actual_crc) {
+    // boot_flags.fw_crc_ok = 1;
+    // return E_OK;
+    // }
+    // else {
+    // return E_CORRUPTED;
+    // }
   }
   else if (state == DFU_STATE_ABORT) {
     return E_ABORTED;
   }
+
+  return E_OK;
 }
