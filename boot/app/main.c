@@ -9,6 +9,23 @@
 
 #define NUM_RETRIES 10U
 
+static void spin();
+static void bootloader_init();
+static void bootloader_execute();
+
+static void spin()
+{
+  uint32_t retries = NUM_RETRIES;
+  while (retries-- > 0) {
+    dfu_init();
+    bootloader_execute();
+  }
+
+  uart_print("boot: fatal error, halting\r\n");
+  while (1) {
+  }
+}
+
 static void bootloader_init()
 {
   uart_init(UART_BAUDRATE_115200);
@@ -45,20 +62,6 @@ static void bootloader_execute()
       }
       boot_jumpToApp();
     }
-  }
-}
-
-
-static void spin()
-{
-  uint32_t retries = NUM_RETRIES;
-  while (retries-- > 0) {
-    dfu_init();
-    bootloader_execute();
-  }
-
-  uart_print("boot: fatal error, halting\r\n");
-  while (1) {
   }
 }
 

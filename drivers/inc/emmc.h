@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include "status.h"
+
 #define SECTOR_SIZE                 512
 #define BYTES_TO_SECTORS(x) ((x) + SECTOR_SIZE - 1) / SECTOR_SIZE
 
@@ -149,8 +151,8 @@ static volatile EMMC2Regs_t * const pxEMMC =
 #define ACMD6               (CMD_INDEX(6) | CMD_RESP_48 | CMD_CRCCHK_EN | CMD_IXCHK_EN)
 #define CMD55               (CMD_INDEX(55) | CMD_RESP_48 | CMD_CRCCHK_EN | CMD_IXCHK_EN)
 
-int emmc_init( void );
-int emmc_read_blocks( uint32_t ulSector, void *pvBuf, uint32_t ulCount );
-int emmc_write_blocks( uint32_t ulSector, const void *pvBuf, uint32_t ulCount );
+StatusCode emmc_init( void );
+StatusCode emmc_read_blocks( uint32_t ulSector, void *pvBuf, uint32_t ulCount );
+StatusCode emmc_write_blocks( uint32_t ulSector, const void *pvBuf, uint32_t ulCount );
 
 #endif

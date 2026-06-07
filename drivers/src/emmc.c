@@ -51,7 +51,7 @@ static StatusCode blockingWaitStatus( uint32_t ulMask, uint32_t ulTimeoutMs )
 static StatusCode sdSetClock(uint32_t ulHz)
 {
   // wait for lines to be free
-  if (blockingWaitStatus(STATUS_CMD_INHIBIT | STATUS_DAT_INHIBIT, 2000) != EMMC_OK) {
+  if (blockingWaitStatus(STATUS_CMD_INHIBIT | STATUS_DAT_INHIBIT, 2000) != E_OK) {
     return E_TIMED_OUT;
   }
 
@@ -202,7 +202,7 @@ StatusCode emmc_init(void)
   return E_OK;
 }
 
-int emmc_read_blocks( uint32_t ulSector, void *pvBuf, uint32_t ulCount )
+StatusCode emmc_read_blocks( uint32_t ulSector, void *pvBuf, uint32_t ulCount )
 {
   if (ulCount == 0) {
     return E_OK;
@@ -254,7 +254,7 @@ int emmc_read_blocks( uint32_t ulSector, void *pvBuf, uint32_t ulCount )
 }
 
 
-int emmc_write_blocks( uint32_t ulSector, const void *pvBuf, uint32_t ulCount )
+StatusCode emmc_write_blocks( uint32_t ulSector, const void *pvBuf, uint32_t ulCount )
 {
   if (ulCount == 0) {
     return E_OK;

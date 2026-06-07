@@ -12,9 +12,8 @@ static uint32_t current_sector_counter;
 static bool unwritten_sector;
 static bool started;
 
-static DFU_Packet dfu_packet_receive()
+static void dfu_packet_receive(DFU_Packet *packet)
 {
-  DFU_Packet packet;
   Packet_State state = PACKET_STATE_START;
   while (state != PACKET_STATE_SUCCESS) {
     uint8_t byte = uart_rx();
@@ -28,7 +27,7 @@ static DFU_Packet dfu_packet_receive()
 
     case PACKET_STATE_CMD:
       if ((byte >= CMD_REQ) && (byte < NUM_CMDS)) {
-        packet.CMD = byte;
+        packet->CMD = byte;
         state = PACKET_STATE_LENGTH;
       }
       else {
@@ -38,15 +37,15 @@ static DFU_Packet dfu_packet_receive()
 
     case PACKET_STATE_LENGTH:
       uint8_t byte_lsb = uart_rx();
-      packet.LEN = (uint16_t)((uint16_t)(byte << 8U) | byte_lsb);
+      packet->LEN = (uint16_t)((uint16_t)(byte << 8U) | byte_lsb);
       state = PACKET_STATE_PAYLOAD;
       break;
 
     case PACKET_STATE_PAYLOAD:
       uint16_t remaining = 1;
-      packet.DATA[0] = byte;
-      while (remaining < packet.LEN) {
-        packet.DATA[remaining] = uart_rx();
+      packet->DATA[0] = byte;
+      while (remaining < packet->LEN) {
+        packet->DATA[remaining] = uart_rx();
         remaining++;
       }
       state = PACKET_STATE_CRC;
@@ -59,7 +58,7 @@ static DFU_Packet dfu_packet_receive()
 
       uint32_t crc = ((uint32_t)(byte << 24U) | (uint32_t)(crc_b2 << 16U) | (uint32_t)(crc_b3 << 8U) | (crc_b4));
 
-      packet.CRC = crc;
+      packet->CRC = crc;
       state = PACKET_STATE_END;
       break;
 
@@ -70,9 +69,9 @@ static DFU_Packet dfu_packet_receive()
       break;
 
     case PACKET_STATE_ERROR:
-      packet.CMD = 0;
-      packet.CRC = 0;
-      packet.LEN = 0;
+      packet->CMD = 0;
+      packet->CRC = 0;
+      packet->LEN = 0;
       state = PACKET_STATE_START;
       break;
 
@@ -80,8 +79,6 @@ static DFU_Packet dfu_packet_receive()
       break;
     }
   }
-
-  return packet;
 }
 
 StatusCode dfu_init()
@@ -103,7 +100,8 @@ StatusCode dfu_receive()
   uint32_t img_actual_crc;
 
   while (state != DFU_STATE_DONE && state != DFU_STATE_ABORT) {
-    DFU_Packet packet = dfu_packet_receive();
+    DFU_Packet packet;
+    dfu_packet_receive(&packet);
     switch (packet.CMD) {
     case CMD_REQ:
       // Send version, slot info
