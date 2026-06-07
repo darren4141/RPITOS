@@ -7,6 +7,7 @@ void kmain(void)
 {
   uart_init(UART_BAUDRATE_115200);
   boot_flags_init();
+  dfu_init();
 
   if (boot_flags.dfu_requested == DFU_REQUEST) {
     if (dfu_recieve() == E_OK) {

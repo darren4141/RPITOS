@@ -45,6 +45,7 @@ typedef struct DFU_Packet {
   uint32_t CRC;
 } DFU_Packet;
 
+StatusCode dfu_init();
 StatusCode dfu_receive();
 
 #endif
