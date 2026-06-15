@@ -191,7 +191,6 @@ StatusCode emmc_init(void)
   } while (!(ulOCR & (1u << 31)));
 
   xIsHC = (ulOCR & (1u << 30)) ? 1 : 0;
-  uart_printf("emmc: OCR=0x%08X HC=%d\r\n", ulOCR, xIsHC);
 
   // CMD2 — get CID (136-bit response, just ignore the payload)
   if (emmc_send_command(CMD2, 0) != E_OK) {

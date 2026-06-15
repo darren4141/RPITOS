@@ -4,6 +4,7 @@
 #include "dfu.h"
 #include "emmc.h"
 #include "memory_map.h"
+#include "uart.h"
 
 static uint8_t current_sector[SECTOR_SIZE];
 static uint32_t current_sector_counter;
@@ -24,6 +25,8 @@ StatusCode boot_validateApp()
 
 StatusCode boot_loadApp()
 {
+  uart_print("Loading app");
+
   if (boot_flags.fw_crc_ok != 1) {
     return E_CORRUPTED;
   }
@@ -33,9 +36,21 @@ StatusCode boot_loadApp()
 
   StartPacket *start_pkt = (StartPacket *)current_sector;
 
+  uart_printf("App details: version: %u length: %uB\r\n", start_pkt->version_num, start_pkt->app_length);
+
   uint32_t ulSectors = BYTES_TO_SECTORS(start_pkt->app_length);
 
   emmc_read_blocks(EMMC_SECTOR_APP + 1, (void *)APP_START_ADDR, ulSectors);
+
+  uart_print("App hex dump (4 bytes = 1 ARM instruction):\r\n");
+  for (uint32_t i = 0; i < 64; i += 4) {
+    uart_printf("  %05x: %02X %02X %02X %02X\r\n",
+                APP_START_ADDR + i,
+                ((unsigned char *)APP_START_ADDR)[i + 0],
+                ((unsigned char *)APP_START_ADDR)[i + 1],
+                ((unsigned char *)APP_START_ADDR)[i + 2],
+                ((unsigned char *)APP_START_ADDR)[i + 3]);
+  }
 
   // verify CRC
 

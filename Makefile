@@ -7,6 +7,7 @@ ARMGNU ?= arm-none-eabi
 
 BUILD   = build/
 TARGET  = kernel7l.img
+HEX     = kernel7l.hex
 LIST    = kernel.list
 MAP     = kernel.map
 LINKER  = kernel.ld
@@ -27,7 +28,7 @@ OBJECTS := $(patsubst startup/%.s,   $(BUILD)%.o, $(ASM_SRCS)) \
            $(patsubst kernel/src/%.c, $(BUILD)%.o, $(filter kernel/src/%, $(C_SRCS)))
 
 # Rules
-all: $(TARGET) $(LIST)
+all: $(TARGET) $(HEX) $(LIST)
 
 rebuild: clean all
 
@@ -36,6 +37,9 @@ $(LIST): $(BUILD)output.elf
 
 $(TARGET): $(BUILD)output.elf
 	$(ARMGNU)-objcopy $(BUILD)output.elf -O binary $(TARGET)
+
+$(HEX): $(BUILD)output.elf
+	$(ARMGNU)-objcopy $(BUILD)output.elf -O ihex $(HEX)
 
 LIBGCC := $(shell $(ARMGNU)-gcc $(CFLAGS) -print-libgcc-file-name)
 
@@ -62,7 +66,7 @@ $(BUILD):
 
 clean:
 	-rm -rf $(BUILD)
-	-rm -f $(TARGET) $(BOOT_TARGET)
+	-rm -f $(TARGET) $(HEX) $(BOOT_TARGET) $(BOOT_HEX)
 	-rm -f $(LIST)
 	-rm -f $(MAP)
 
@@ -92,7 +96,12 @@ BOOT_OBJECTS := $(patsubst boot/%.s,           $(BOOT_BUILD)%.o, $(BOOT_ASM_SRCS
                 $(patsubst libraries/src/%.c,  $(BOOT_BUILD)%.o, $(filter libraries/src/%, $(BOOT_C_SRCS))) \
                 $(patsubst kernel/src/%.c,     $(BOOT_BUILD)%.o, $(filter kernel/src/%, $(BOOT_C_SRCS)))
 
-boot: $(BOOT_TARGET)
+BOOT_HEX = boot7l.hex
+
+boot: $(BOOT_TARGET) $(BOOT_HEX)
+
+$(BOOT_HEX): $(BOOT_BUILD)boot.elf
+	$(ARMGNU)-objcopy $(BOOT_BUILD)boot.elf -O ihex $(BOOT_HEX)
 
 $(BOOT_TARGET): $(BOOT_BUILD)boot.elf
 	$(ARMGNU)-objcopy $(BOOT_BUILD)boot.elf -O binary $(BOOT_TARGET)

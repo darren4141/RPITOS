@@ -79,13 +79,16 @@ void task_5_func(void *params)
 
 void kmain(void)
 {
+  // First thing: light the LED so we know the app is running
+  // even if UART isn't working yet.
+  gpio_set_function(16, GPIO_FUNC_OUTPUT);
+  gpio_on(16);
+
   scheduler_init(&clk_freq, hz, &tick_count);
 
   uart_init(UART_BAUDRATE_115200);
 
   uart_print("Starting main...\r\n");
-  gpio_set_function(16, GPIO_FUNC_OUTPUT);
-  gpio_on(16);
 
   uart_print("Creating tasks...\r\n");
   task_create(task_1_func, 512, TASK_PRIORITY_5, NULL, &tcb_1);

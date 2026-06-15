@@ -6,6 +6,9 @@
 #include "emmc.h"
 #include "uart.h"
 
+#define DFU_ACK  0x06
+#define DFU_NACK 0x15
+
 static uint32_t sectors_written;
 static uint8_t current_sector[SECTOR_SIZE];
 static uint32_t current_sector_counter;
@@ -99,6 +102,8 @@ StatusCode dfu_receive()
   uint32_t img_expected_crc;
   uint32_t img_actual_crc;
 
+  uart_print("Start of dfu_receive() loop...\r\n");
+
   while (state != DFU_STATE_DONE && state != DFU_STATE_ABORT) {
     DFU_Packet packet;
     dfu_packet_receive(&packet);
@@ -110,6 +115,7 @@ StatusCode dfu_receive()
     case CMD_START:
       if (!started) {
         if (packet.LEN != 8U) {
+          uart_tx(DFU_NACK);
           state = DFU_STATE_ABORT;
           break;
         }
@@ -125,8 +131,10 @@ StatusCode dfu_receive()
         sectors_written = 1;
 
         started = true;
+        uart_tx(DFU_ACK);
       }
       else {
+        uart_tx(DFU_NACK);
         state = DFU_STATE_ABORT;
       }
       break;
@@ -134,6 +142,7 @@ StatusCode dfu_receive()
     case CMD_DATA:
       // our packet length must be a multiple of 32 bytes
       if (packet.LEN % 4 != 0) {
+        uart_tx(DFU_NACK);
         state = DFU_STATE_ABORT;
         break;
       }
@@ -190,12 +199,13 @@ StatusCode dfu_receive()
         }
 
         // compute img_actual_crc
-        // ACK
+        uart_tx(DFU_ACK);
       }
 
       break;
 
     case CMD_ABORT:
+      uart_tx(DFU_NACK);
       state = DFU_STATE_ABORT;
       break;
 
@@ -210,6 +220,7 @@ StatusCode dfu_receive()
         // write it
         emmc_write_blocks(EMMC_SECTOR_APP + sectors_written, current_sector, 1U);
       }
+      uart_tx(DFU_ACK);
       state = DFU_STATE_DONE;
       break;
 

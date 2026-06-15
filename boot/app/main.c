@@ -77,6 +77,8 @@ void kmain(void)
 
   // TEMP: force CRC_OK flag to 1
   boot_flags.fw_crc_ok = 1;
+  // TEMP: always enter DFU mode
+  boot_flags.dfu_requested = DFU_REQUEST;
 
   for (uint32_t retries = NUM_RETRIES; retries > 0; retries--) {
     StatusCode ret = bootloader_execute();
