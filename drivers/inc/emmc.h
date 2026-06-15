@@ -131,25 +131,30 @@ static volatile EMMC2Regs_t * const pxEMMC =
 #define TM_AUTO_CMD12       (1 << 2)
 #define TM_BLKCNT_EN        (1 << 1)
 
-// SD commands
+// eMMC commands
 
-#define CMD0                (CMD_INDEX(0) | CMD_RESP_NONE)
-#define CMD2                (CMD_INDEX(2) | CMD_RESP_136 | CMD_CRCCHK_EN)
-#define CMD3                (CMD_INDEX(3) | CMD_RESP_48 | CMD_CRCCHK_EN | CMD_IXCHK_EN)
-#define CMD7                (CMD_INDEX(7) | CMD_RESP_48B | CMD_CRCCHK_EN | CMD_IXCHK_EN)
-#define CMD8                (CMD_INDEX(8) | CMD_RESP_48 | CMD_CRCCHK_EN | CMD_IXCHK_EN)
-#define CMD17               (CMD_INDEX(17) | CMD_RESP_48 | CMD_CRCCHK_EN | CMD_IXCHK_EN \
+#define CMD0                (CMD_INDEX(0)  | CMD_RESP_NONE)
+#define CMD1                (CMD_INDEX(1)  | CMD_RESP_48)
+#define CMD2                (CMD_INDEX(2)  | CMD_RESP_136 | CMD_CRCCHK_EN)
+#define CMD3                (CMD_INDEX(3)  | CMD_RESP_48  | CMD_CRCCHK_EN | CMD_IXCHK_EN)
+#define CMD6_SWITCH         (CMD_INDEX(6)  | CMD_RESP_48B | CMD_CRCCHK_EN | CMD_IXCHK_EN)
+#define CMD7                (CMD_INDEX(7)  | CMD_RESP_48B | CMD_CRCCHK_EN | CMD_IXCHK_EN)
+#define CMD17               (CMD_INDEX(17) | CMD_RESP_48  | CMD_CRCCHK_EN | CMD_IXCHK_EN \
                              | CMD_ISDATA | TM_DAT_DIR_RD)
-#define CMD24               (CMD_INDEX(24) | CMD_RESP_48 | CMD_CRCCHK_EN | CMD_IXCHK_EN \
-                             | CMD_ISDATA)
-#define CMD18               (CMD_INDEX(18) | CMD_RESP_48 | CMD_CRCCHK_EN | CMD_IXCHK_EN \
-                             | CMD_ISDATA | TM_DAT_DIR_RD | TM_MULTI_BLOCK  \
+#define CMD18               (CMD_INDEX(18) | CMD_RESP_48  | CMD_CRCCHK_EN | CMD_IXCHK_EN \
+                             | CMD_ISDATA | TM_DAT_DIR_RD | TM_MULTI_BLOCK \
                              | TM_BLKCNT_EN | TM_AUTO_CMD12)
-#define CMD25               (CMD_INDEX(25) | CMD_RESP_48 | CMD_CRCCHK_EN | CMD_IXCHK_EN \
+#define CMD24               (CMD_INDEX(24) | CMD_RESP_48  | CMD_CRCCHK_EN | CMD_IXCHK_EN \
+                             | CMD_ISDATA)
+#define CMD25               (CMD_INDEX(25) | CMD_RESP_48  | CMD_CRCCHK_EN | CMD_IXCHK_EN \
                              | CMD_ISDATA | TM_MULTI_BLOCK | TM_BLKCNT_EN | TM_AUTO_CMD12)
-#define ACMD41              (CMD_INDEX(41) | CMD_RESP_48)
-#define ACMD6               (CMD_INDEX(6) | CMD_RESP_48 | CMD_CRCCHK_EN | CMD_IXCHK_EN)
-#define CMD55               (CMD_INDEX(55) | CMD_RESP_48 | CMD_CRCCHK_EN | CMD_IXCHK_EN)
+
+// CMD6 SWITCH arg: access=write byte (3), EXT_CSD index, value
+#define SWITCH_ARG(index, value)    ((3U << 24) | ((uint32_t)(index) << 16) | ((uint32_t)(value) << 8))
+#define EXT_CSD_BUS_WIDTH           183
+#define EXT_CSD_BUS_WIDTH_1BIT      0
+#define EXT_CSD_BUS_WIDTH_4BIT      1
+#define EXT_CSD_BUS_WIDTH_8BIT      2
 
 StatusCode emmc_init( void );
 StatusCode emmc_read_blocks( uint32_t ulSector, void *pvBuf, uint32_t ulCount );

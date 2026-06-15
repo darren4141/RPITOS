@@ -120,14 +120,13 @@ void uart_print(const char *str)
   __asm__ volatile ("cpsie i" ::: "memory");
 }
 
-static void print_uint(uint32_t n, uint32_t base, const char *digits)
+static void print_uint(uint32_t n, uint32_t base, const char *digits, int width)
 {
   char buf[10];
   int i = 0;
-  if (n == 0) {
-    uart_tx('0');return;
-  }
-  while (n > 0) { buf[i++] = digits[n % base];n /= base; }
+  if (n == 0) { buf[i++] = '0'; }
+  else { while (n > 0) { buf[i++] = digits[n % base]; n /= base; } }
+  for (int pad = i; pad < width; pad++) uart_tx(' ');
   while (i > 0) { uart_tx((uint8_t)buf[--i]); }
 }
 
@@ -142,6 +141,8 @@ void uart_printf(const char *fmt, ...)
       uart_tx((uint8_t)*fmt++);continue;
     }
     fmt++;
+    int width = 0;
+    while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt++ - '0'); }
     switch (*fmt) {
     case 'c': uart_tx((uint8_t)va_arg(args, int));break;
 
@@ -149,17 +150,17 @@ void uart_printf(const char *fmt, ...)
 
     case 'd': { int32_t n = va_arg(args, int32_t);
                 if (n < 0) {
-                  uart_tx('-');print_uint((uint32_t)-n, 10, "0123456789");
+                  uart_tx('-');print_uint((uint32_t)-n, 10, "0123456789", width > 0 ? width - 1 : 0);
                 }
                 else {
-                  print_uint((uint32_t)n, 10, "0123456789");
+                  print_uint((uint32_t)n, 10, "0123456789", width);
                 } break; }
 
-    case 'u': print_uint(va_arg(args, uint32_t), 10, "0123456789");break;
+    case 'u': print_uint(va_arg(args, uint32_t), 10, "0123456789", width);break;
 
-    case 'x': print_uint(va_arg(args, uint32_t), 16, "0123456789abcdef");break;
+    case 'x': print_uint(va_arg(args, uint32_t), 16, "0123456789abcdef", width);break;
 
-    case 'X': print_uint(va_arg(args, uint32_t), 16, "0123456789ABCDEF");break;
+    case 'X': print_uint(va_arg(args, uint32_t), 16, "0123456789ABCDEF", width);break;
 
     case '%': uart_tx('%');break;
 
@@ -192,14 +193,13 @@ void uart_print(const char *str)
   }
 }
 
-static void print_uint(uint32_t n, uint32_t base, const char *digits)
+static void print_uint(uint32_t n, uint32_t base, const char *digits, int width)
 {
   char buf[10];
   int i = 0;
-  if (n == 0) {
-    uart_tx_raw('0');return;
-  }
-  while (n > 0) { buf[i++] = digits[n % base];n /= base; }
+  if (n == 0) { buf[i++] = '0'; }
+  else { while (n > 0) { buf[i++] = digits[n % base]; n /= base; } }
+  for (int pad = i; pad < width; pad++) uart_tx_raw(' ');
   while (i > 0) { uart_tx_raw((uint8_t)buf[--i]); }
 }
 
@@ -213,6 +213,8 @@ void uart_printf(const char *fmt, ...)
       uart_tx_raw((uint8_t)*fmt++);continue;
     }
     fmt++;
+    int width = 0;
+    while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt++ - '0'); }
     switch (*fmt) {
     case 'c': uart_tx_raw((uint8_t)va_arg(args, int));break;
 
@@ -220,17 +222,17 @@ void uart_printf(const char *fmt, ...)
 
     case 'd': { int32_t n = va_arg(args, int32_t);
                 if (n < 0) {
-                  uart_tx_raw('-');print_uint((uint32_t)-n, 10, "0123456789");
+                  uart_tx_raw('-');print_uint((uint32_t)-n, 10, "0123456789", width > 0 ? width - 1 : 0);
                 }
                 else {
-                  print_uint((uint32_t)n, 10, "0123456789");
+                  print_uint((uint32_t)n, 10, "0123456789", width);
                 } break; }
 
-    case 'u': print_uint(va_arg(args, uint32_t), 10, "0123456789");break;
+    case 'u': print_uint(va_arg(args, uint32_t), 10, "0123456789", width);break;
 
-    case 'x': print_uint(va_arg(args, uint32_t), 16, "0123456789abcdef");break;
+    case 'x': print_uint(va_arg(args, uint32_t), 16, "0123456789abcdef", width);break;
 
-    case 'X': print_uint(va_arg(args, uint32_t), 16, "0123456789ABCDEF");break;
+    case 'X': print_uint(va_arg(args, uint32_t), 16, "0123456789ABCDEF", width);break;
 
     case '%': uart_tx_raw('%');break;
 

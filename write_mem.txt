@@ -1,8 +1,7 @@
-# write bootloader to sector 2048 (byte offset 1048576)
-dd if=kernel8.img of=/dev/sdX bs=512 seek=2048 conv=notrunc
+# Bootloader — mount sdf1 and copy as kernel7l.img
+sudo mount /dev/sdf1 /mnt/emmc
+sudo cp boot7l.img /mnt/emmc/kernel7l.img
+sudo umount /mnt/emmc
 
-# write app binary to sector 4096 (byte offset 2097152)
-dd if=app.bin of=/dev/sdX bs=512 seek=4096 conv=notrunc
-
-# write metadata — easier to do with a small host tool
-./write_metadata /dev/sdX 8192 app.bin
+# App image — write raw to sector 4096
+sudo dd if=kernel7l.img of=/dev/sdf bs=512 seek=4096 conv=notrunc status=progress
