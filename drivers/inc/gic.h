@@ -4,5 +4,6 @@
 #include <stdint.h>
 
 void gic_init();
+void gic_disable(void);
 
 #endif

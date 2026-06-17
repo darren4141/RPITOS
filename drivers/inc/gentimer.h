@@ -8,6 +8,7 @@
 #define HZ 1000
 
 StatusCode gentimer_init(uint32_t *clk_freq, uint32_t hz);
+void gentimer_disable(void);
 
 uint64_t read_cntpct(void);
 

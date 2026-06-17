@@ -1,7 +1,10 @@
+#include "boot_flags.h"
 #include "delay.h"
+#include "dfu_trigger.h"
 #include "gentimer.h"
 #include "gic.h"
 #include "gpio.h"
+#include "reset.h"
 #include "scheduler.h"
 #include "task.h"
 #include "uart.h"
@@ -20,6 +23,26 @@ static TaskControlBlock *tcb_2 = NULL;
 static TaskControlBlock *tcb_3 = NULL;
 static TaskControlBlock *tcb_4 = NULL;
 static TaskControlBlock *tcb_5 = NULL;
+static TaskControlBlock *tcb_dfu_trigger = NULL;
+
+// Watches UART RX for the host's raw DFU trigger key. On match, sets the
+// DFU flag and reboots into the bootloader — no ack from here, only the
+// bootloader acks once it's actually ready to receive.
+void dfu_trigger_task(void *params)
+{
+  while (1) {
+    uint8_t byte;
+    while (uart_rx_nonblocking(&byte) == E_OK) {
+      if (dfu_trigger_feed(byte)) {
+        __asm__ volatile ("cpsid i" ::: "memory");
+        boot_flags.dfu_requested = DFU_REQUEST;
+        boot_flags.reset_reason = RESET_REASON_SOFTWARE;
+        enter_bootloader();
+      }
+    }
+    task_delay_ms(1);
+  }
+}
 
 void task_1_func(void *params)
 {
@@ -96,6 +119,7 @@ void kmain(void)
   task_create(task_3_func, 512, TASK_PRIORITY_4, NULL, &tcb_3);
   task_create(task_4_func, 512, TASK_PRIORITY_5, NULL, &tcb_4);
   task_create(task_5_func, 512, TASK_PRIORITY_3, NULL, &tcb_5);
+  task_create(dfu_trigger_task, 512, TASK_PRIORITY_1, NULL, &tcb_dfu_trigger);
 
   uart_print("Initializing GIC...\r\n");
   gic_init();

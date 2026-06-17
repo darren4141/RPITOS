@@ -43,6 +43,11 @@ CMD_ABORT  = 0x05
 ACK  = 0x06
 NACK = 0x15
 
+# Raw remote-DFU trigger key (must match DFU_TRIGGER_KEY in dfu_trigger.h).
+# Sent unframed (not part of the CMD_* packet protocol) so a running app can
+# recognize it without running the full packet parser.
+TRIGGER_KEY = bytes([0xDF, 0x00, 0xDF, 0x00])
+
 # Max payload per DATA packet — LEN % 4 must == 0 (firmware enforces)
 MAX_CHUNK = 256  # MAX_DATA_SIZE_BYTES from dfu.h
 
@@ -142,6 +147,39 @@ def build_packet(cmd: int, data: bytes) -> bytes:
 
 
 # ---------------------------------------------------------------------------
+# Remote DFU trigger handshake
+# ---------------------------------------------------------------------------
+
+def wait_for_dfu_ready(ser: "serial.Serial", interval_s: float = 0.1,
+                        overall_timeout_s: float = 10.0) -> bool:
+    """
+    Repeatedly sends the raw trigger key until a single ACK byte comes back.
+
+    Works whether the target is currently running the app (which silently
+    resets into the bootloader on a match — no ack from the app itself) or
+    is already sitting in the bootloader's own trigger-wait loop (which acks
+    immediately) — the host doesn't need to know which state it's in, it
+    just keeps sending until something acks. The timeout budgets for one
+    full reset + re-init cycle (eMMC init etc.) if the app has to reboot.
+    """
+    print("Waiting for target (sending DFU trigger)...", end="", flush=True)
+    old_timeout = ser.timeout
+    ser.timeout = interval_s
+    deadline = time.time() + overall_timeout_s
+    try:
+        while time.time() < deadline:
+            ser.write(TRIGGER_KEY)
+            resp = ser.read(1)
+            if resp and resp[0] == ACK:
+                print(" ready ✓")
+                return True
+    finally:
+        ser.timeout = old_timeout
+    print(" TIMEOUT")
+    return False
+
+
+# ---------------------------------------------------------------------------
 # ACK / NACK handling
 # ---------------------------------------------------------------------------
 
@@ -194,6 +232,10 @@ def flash(ser: "serial.Serial", image_path: str) -> bool:
     # Pad to a multiple of 4 — CMD_DATA requires LEN % 4 == 0
     if app_length % 4:
         img += bytes(4 - app_length % 4)
+
+    if not wait_for_dfu_ready(ser):
+        print("Error: target never responded to the DFU trigger key")
+        return False
 
     # ── CMD_START ─────────────────────────────────────────────────────────────
     # StartPacket: version_num (u16 LE), app_length (u16 LE), crc (u32 LE)

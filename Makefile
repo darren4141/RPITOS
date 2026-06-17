@@ -85,7 +85,8 @@ BOOT_C_SRCS := boot/app/main.c \
                drivers/src/crc.c \
                drivers/src/emmc.c \
                drivers/src/uart.c \
-               kernel/src/boot_flags.c
+               kernel/src/boot_flags.c \
+               kernel/src/dfu_trigger.c
 
 BOOT_ASM_SRCS := boot/startup.s
 

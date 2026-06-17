@@ -18,6 +18,12 @@ StatusCode boot_init()
   return E_OK;
 }
 
+// Called from bootloader_init()'s cold-boot path (boot/app/main.c) to
+// re-derive fw_crc_ok from scratch, since no in-RAM flag can be trusted
+// after a reset that may not have preserved RAM contents.
+// STUB: always reports valid. Replace with a real CRC/signature check
+// against the eMMC-resident app image (EMMC_SECTOR_APP) before relying on
+// this in the field.
 StatusCode boot_validateApp()
 {
   return E_OK;

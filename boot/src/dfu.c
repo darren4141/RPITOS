@@ -3,6 +3,7 @@
 #include <stdbool.h>
 
 #include "boot_flags.h"
+#include "dfu_trigger.h"
 #include "emmc.h"
 #include "uart.h"
 
@@ -94,15 +95,24 @@ StatusCode dfu_init()
   return E_OK;
 }
 
+// Do not uart_print anything during the dfu_receive loop, it may confuse the host
 StatusCode dfu_receive()
 {
+  dfu_trigger_reset();
+  while (1) {
+    uint8_t byte = uart_rx();
+    if (dfu_trigger_feed(byte)) {
+      uart_tx(DFU_ACK);
+      dfu_trigger_reset();
+      break;
+    }
+  }
+
   DFU_State state = DFU_STATE_START;
 
   bool flags_crc_ok_set = false;
   uint32_t img_expected_crc;
   uint32_t img_actual_crc;
-
-  uart_print("Start of dfu_receive() loop...\r\n");
 
   while (state != DFU_STATE_DONE && state != DFU_STATE_ABORT) {
     DFU_Packet packet;
