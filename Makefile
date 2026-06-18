@@ -82,6 +82,7 @@ BOOT_CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall \
 BOOT_C_SRCS := boot/app/main.c \
                $(wildcard boot/src/*.c) \
                drivers/src/gpio.c \
+               drivers/src/jtag.c \
                drivers/src/crc.c \
                drivers/src/emmc.c \
                drivers/src/uart.c \

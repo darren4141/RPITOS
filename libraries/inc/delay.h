@@ -6,6 +6,7 @@
 
 StatusCode delay_init(volatile uint64_t *p_tick_count);
 
+void delay_cycles(uint64_t cycles);
 void delay_ms(uint64_t ticks);
 
 #endif

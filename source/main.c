@@ -4,6 +4,7 @@
 #include "gentimer.h"
 #include "gic.h"
 #include "gpio.h"
+#include "jtag.h"
 #include "reset.h"
 #include "scheduler.h"
 #include "task.h"
@@ -106,10 +107,18 @@ void kmain(void)
   // even if UART isn't working yet.
   gpio_set_function(16, GPIO_FUNC_OUTPUT);
   gpio_on(16);
+  delay_cycles(3000000);
+  gpio_off(16);
+  delay_cycles(3000000);
+
+  jtag_gpio_init();
+
+  uart_init(UART_BAUDRATE_115200);
+  uart_print("uart initialized!");
 
   scheduler_init(&clk_freq, hz, &tick_count);
 
-  uart_init(UART_BAUDRATE_115200);
+  uart_task_start();
 
   uart_print("Starting main...\r\n");
 

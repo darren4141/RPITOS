@@ -5,10 +5,16 @@
 #include "boot_flags.h"
 #include "dfu.h"
 #include "emmc.h"
+#include "jtag.h"
 #include "status.h"
 #include "uart.h"
 
-#define NUM_RETRIES 10U
+#define NUM_RETRIES    10U
+
+// DAP access control register
+#define DEBUG_ROM_BASE 0xFF800000
+#define DAP_BASE       0xFF820000
+
 
 static void bootloader_init();
 static StatusCode bootloader_execute();
@@ -19,8 +25,27 @@ static void bootloader_init()
   uart_init(UART_BAUDRATE_115200);
   uart_print("Bootloader start, initializing components\r\n");
   uart_print("uart initialized\r\n");
+  jtag_gpio_init();
+  uart_print("jtag initialized\r\n");
   boot_flags_init();
   uart_print("boot flags initialized\r\n");
+
+  uart_printf("GPIO22 func: %d (expect 3)\r\n", (GPIO->GPFSEL[2] >> 6) & 0x7);
+  uart_printf("GPIO24 func: %d (expect 3)\r\n", (GPIO->GPFSEL[2] >> 12) & 0x7);
+  uart_printf("GPIO25 func: %d (expect 3)\r\n", (GPIO->GPFSEL[2] >> 15) & 0x7);
+  uart_printf("GPIO26 func: %d (expect 3)\r\n", (GPIO->GPFSEL[2] >> 18) & 0x7);
+  uart_printf("GPIO27 func: %d (expect 3)\r\n", (GPIO->GPFSEL[2] >> 21) & 0x7);
+
+  uint32_t debug_rom = *(volatile uint32_t *)(DEBUG_ROM_BASE);
+  uart_printf("debug rom: %x\r\n", debug_rom);
+
+  uint32_t dap = *(volatile uint32_t *)(DAP_BASE);
+  uart_printf("dap: %x\r\n", dap);
+
+  for (int i = 0; i < 16; i++) {
+    uint32_t val = *(volatile uint32_t *)(0xFF800000 + i * 4);
+    uart_printf("0xFF800000 + 0x%x = 0x%x\r\n", i * 4, val);
+  }
 
   status = emmc_init();
   if (status != E_OK) {

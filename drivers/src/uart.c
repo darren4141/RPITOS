@@ -1,6 +1,7 @@
 #include "uart.h"
 
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -13,10 +14,20 @@
 
 static StatusCode uart_hw_init(UartBaudrate baudrate)
 {
+  // gpio_on(16);
+  // delay_cycles(3000000);
+  // gpio_off(16);
+  // delay_cycles(3000000);
+
   gpio_set_function(14, GPIO_FUNC_ALT0);
   gpio_set_function(15, GPIO_FUNC_ALT0);
   gpio_set_pull(14, GPIO_PULL_NONE);
   gpio_set_pull(15, GPIO_PULL_NONE);
+
+  // gpio_on(16);
+  // delay_cycles(3000000);
+  // gpio_off(16);
+  // delay_cycles(3000000);
 
   uint32_t val = UART0->CR;
   val &= ~1U;
@@ -42,6 +53,11 @@ static StatusCode uart_hw_init(UartBaudrate baudrate)
   default:
     return E_INVALID_ARGS;
   }
+
+  // gpio_on(16);
+  // delay_cycles(3000000);
+  // gpio_off(16);
+  // delay_cycles(3000000);
 
   UART0->LCRH = LCRH_WLEN_8 | LCRH_FEN;
   UART0->CR = CR_UARTEN | CR_TXE | CR_RXE;
@@ -78,6 +94,7 @@ static volatile uint16_t p_uart_buf_left = 0;
 static volatile uint16_t p_uart_buf_right = 0;
 
 static TaskControlBlock *uart_tcb = NULL;
+static bool uart_task_started = false;
 
 void uart_tx_task(void *params)
 {
@@ -94,15 +111,25 @@ void uart_tx_task(void *params)
 
 StatusCode uart_init(UartBaudrate baudrate)
 {
-  StatusCode ret = uart_hw_init(baudrate);
-  if (ret != E_OK) {
-    return ret;
+  uart_task_started = false;
+  return uart_hw_init(baudrate);
+}
+
+StatusCode uart_task_start(void)
+{
+  StatusCode ret = task_create(uart_tx_task, 512, TASK_PRIORITY_2, NULL, &uart_tcb);
+  if (ret == E_OK) {
+    uart_task_started = true;
   }
-  return task_create(uart_tx_task, 512, TASK_PRIORITY_2, NULL, &uart_tcb);
+  return ret;
 }
 
 void uart_tx(uint8_t byte)
 {
+  if (!uart_task_started) {
+    uart_tx_raw(byte);
+    return;
+  }
   uint16_t next = p_uart_buf_right + 1;
   if (next >= UART_BUFFER_SIZE) {
     next = 0;
@@ -113,26 +140,38 @@ void uart_tx(uint8_t byte)
 
 void uart_print(const char *str)
 {
-  __asm__ volatile ("cpsid i" ::: "memory");
+  if (uart_task_started) {
+    __asm__ volatile ("cpsid i" ::: "memory");
+  }
   while (*str) {
     uart_tx((uint8_t)*str++);
   }
-  __asm__ volatile ("cpsie i" ::: "memory");
+  if (uart_task_started) {
+    __asm__ volatile ("cpsie i" ::: "memory");
+  }
 }
 
 static void print_uint(uint32_t n, uint32_t base, const char *digits, int width, char pad)
 {
   char buf[10];
   int i = 0;
-  if (n == 0) { buf[i++] = '0'; }
-  else { while (n > 0) { buf[i++] = digits[n % base]; n /= base; } }
-  for (int p = i; p < width; p++) uart_tx((uint8_t)pad);
+  if (n == 0) {
+    buf[i++] = '0';
+  }
+  else {
+    while (n > 0) { buf[i++] = digits[n % base];n /= base; }
+  }
+  for (int p = i; p < width; p++) {
+    uart_tx((uint8_t)pad);
+  }
   while (i > 0) { uart_tx((uint8_t)buf[--i]); }
 }
 
 void uart_printf(const char *fmt, ...)
 {
-  __asm__ volatile ("cpsid i" ::: "memory");
+  if (uart_task_started) {
+    __asm__ volatile ("cpsid i" ::: "memory");
+  }
   va_list args;
   va_start(args, fmt);
 
@@ -142,7 +181,9 @@ void uart_printf(const char *fmt, ...)
     }
     fmt++;
     char pad = ' ';
-    if (*fmt == '0') { pad = '0'; fmt++; }
+    if (*fmt == '0') {
+      pad = '0';fmt++;
+    }
     int width = 0;
     while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt++ - '0'); }
     switch (*fmt) {
@@ -172,10 +213,13 @@ void uart_printf(const char *fmt, ...)
   }
 
   va_end(args);
-  __asm__ volatile ("cpsie i" ::: "memory");
+  if (uart_task_started) {
+    __asm__ volatile ("cpsie i" ::: "memory");
+  }
 }
 
 // ── Minimal mode: blocking TX, no task, no ring buffer ────────────────────────
+// Minimal mode is used by the bootloader since it has no RTOS and cannot support a UART task & buffer
 #else
 
 StatusCode uart_init(UartBaudrate baudrate)
@@ -199,9 +243,15 @@ static void print_uint(uint32_t n, uint32_t base, const char *digits, int width,
 {
   char buf[10];
   int i = 0;
-  if (n == 0) { buf[i++] = '0'; }
-  else { while (n > 0) { buf[i++] = digits[n % base]; n /= base; } }
-  for (int p = i; p < width; p++) uart_tx_raw((uint8_t)pad);
+  if (n == 0) {
+    buf[i++] = '0';
+  }
+  else {
+    while (n > 0) { buf[i++] = digits[n % base];n /= base; }
+  }
+  for (int p = i; p < width; p++) {
+    uart_tx_raw((uint8_t)pad);
+  }
   while (i > 0) { uart_tx_raw((uint8_t)buf[--i]); }
 }
 
@@ -216,7 +266,9 @@ void uart_printf(const char *fmt, ...)
     }
     fmt++;
     char pad = ' ';
-    if (*fmt == '0') { pad = '0'; fmt++; }
+    if (*fmt == '0') {
+      pad = '0';fmt++;
+    }
     int width = 0;
     while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt++ - '0'); }
     switch (*fmt) {
