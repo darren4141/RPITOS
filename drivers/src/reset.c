@@ -6,6 +6,7 @@
 #include "gic.h"
 #include "gpio.h"
 #include "memory_map.h"
+#include "uart.h"
 
 #define PM_RSTC (*(volatile uint32_t *)(PM_BASE + PM_RSTC_OFFSET))
 #define PM_WDOG (*(volatile uint32_t *)(PM_BASE + PM_WDOG_OFFSET))
@@ -40,9 +41,11 @@ void enter_bootloader(void)
     *p = 0;
   }
 
+  uart_deinit();
+
   __asm__ volatile ("dsb sy" ::: "memory");
   __asm__ volatile ("isb" ::: "memory");
 
-  void (*bootEntry)(void) = (void (*)(void))BOOTLOADER_START_ADDR;
+  void (*bootEntry)(void) = (void (*)(void)) BOOTLOADER_START_ADDR;
   bootEntry();
 }

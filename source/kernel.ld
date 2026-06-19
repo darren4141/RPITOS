@@ -41,11 +41,9 @@ SECTIONS {
 	}
 
 	/* Shared flags — must match boot.ld exactly */
-	.shared_flags (NOLOAD) : {
-		. = 0x88000;
+	.shared_flags 0x88000 (NOLOAD) : {
 		_shared_flags_start = .;
 		*(.shared_flags)
-		. = 0x88400;
 		_shared_flags_end = .;
 	}
 

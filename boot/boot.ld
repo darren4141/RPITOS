@@ -42,11 +42,9 @@ SECTIONS {
 
 	/* Shared flags — 1024 bytes of RAM shared between bootloader and kernel.
 	   Both images agree on 0x88000–0x88400; no data is emitted here. */
-	.shared_flags (NOLOAD) : {
-		. = 0x88000;
+	.shared_flags 0x88000 (NOLOAD) : {
 		_shared_flags_start = .;
 		*(.shared_flags)
-		. = 0x88400;
 		_shared_flags_end = .;
 	}
 

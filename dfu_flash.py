@@ -18,6 +18,7 @@ Exit terminal: Ctrl+C
 """
 
 import argparse
+import queue
 import struct
 import sys
 import threading
@@ -50,6 +51,64 @@ TRIGGER_KEY = bytes([0xDF, 0x00, 0xDF, 0x00])
 
 # Max payload per DATA packet — LEN % 4 must == 0 (firmware enforces)
 MAX_CHUNK = 256  # MAX_DATA_SIZE_BYTES from dfu.h
+
+
+# ---------------------------------------------------------------------------
+# RX router — prints all target output while the DFU protocol runs
+# ---------------------------------------------------------------------------
+
+class _RxRouter:
+    """
+    Background thread that reads every byte from `ser` and routes it:
+      - ACK / NACK bytes → internal queue  (when enable()d; protocol code calls read_byte())
+      - everything else  → stdout          (printed immediately, always)
+
+    This means UART output from the CM4 is visible even during DFU trigger
+    sending and the packet exchange — nothing is silently swallowed.
+    """
+
+    def __init__(self, ser: "serial.Serial") -> None:
+        self._ser = ser
+        self._proto_q: "queue.SimpleQueue[int]" = queue.SimpleQueue()
+        self._active = threading.Event()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                n = self._ser.in_waiting
+                if n:
+                    data = self._ser.read(n)
+                    for b in data:
+                        if self._active.is_set() and b in (ACK, NACK):
+                            self._proto_q.put(b)
+                        else:
+                            sys.stdout.buffer.write(bytes([b]))
+                            sys.stdout.buffer.flush()
+                else:
+                    time.sleep(0.001)
+            except (serial.SerialException, OSError):
+                break
+
+    def enable(self) -> None:
+        """Route ACK/NACK to the protocol queue instead of stdout."""
+        self._active.set()
+
+    def disable(self) -> None:
+        """Stop routing ACK/NACK — everything goes to stdout again."""
+        self._active.clear()
+
+    def read_byte(self, timeout: float) -> "int | None":
+        """Block up to `timeout` seconds for one ACK/NACK byte."""
+        try:
+            return self._proto_q.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def stop(self) -> None:
+        self._stop.set()
 
 
 # ---------------------------------------------------------------------------
@@ -150,31 +209,21 @@ def build_packet(cmd: int, data: bytes) -> bytes:
 # Remote DFU trigger handshake
 # ---------------------------------------------------------------------------
 
-def wait_for_dfu_ready(ser: "serial.Serial", interval_s: float = 0.1,
+def wait_for_dfu_ready(ser: "serial.Serial", router: "_RxRouter",
+                        interval_s: float = 0.1,
                         overall_timeout_s: float = 10.0) -> bool:
     """
     Repeatedly sends the raw trigger key until a single ACK byte comes back.
-
-    Works whether the target is currently running the app (which silently
-    resets into the bootloader on a match — no ack from the app itself) or
-    is already sitting in the bootloader's own trigger-wait loop (which acks
-    immediately) — the host doesn't need to know which state it's in, it
-    just keeps sending until something acks. The timeout budgets for one
-    full reset + re-init cycle (eMMC init etc.) if the app has to reboot.
+    All non-ACK bytes from the target are printed to stdout by the router.
     """
     print("Waiting for target (sending DFU trigger)...", end="", flush=True)
-    old_timeout = ser.timeout
-    ser.timeout = interval_s
     deadline = time.time() + overall_timeout_s
-    try:
-        while time.time() < deadline:
-            ser.write(TRIGGER_KEY)
-            resp = ser.read(1)
-            if resp and resp[0] == ACK:
-                print(" ready ✓")
-                return True
-    finally:
-        ser.timeout = old_timeout
+    while time.time() < deadline:
+        ser.write(TRIGGER_KEY)
+        b = router.read_byte(interval_s)
+        if b == ACK:
+            print(" ready ✓")
+            return True
     print(" TIMEOUT")
     return False
 
@@ -183,19 +232,18 @@ def wait_for_dfu_ready(ser: "serial.Serial", interval_s: float = 0.1,
 # ACK / NACK handling
 # ---------------------------------------------------------------------------
 
-def wait_ack(ser: "serial.Serial", label: str) -> bool:
-    """Block until one response byte arrives. Returns True on ACK, False otherwise."""
-    resp = ser.read(1)
-    if not resp:
+def wait_ack(router: "_RxRouter", label: str, timeout: float = 5.0) -> bool:
+    """Block until one ACK/NACK arrives via the router. Returns True on ACK."""
+    b = router.read_byte(timeout)
+    if b is None:
         print(f"\n  TIMEOUT waiting for ACK after {label}")
         return False
-    byte = resp[0]
-    if byte == ACK:
+    if b == ACK:
         return True
-    if byte == NACK:
+    if b == NACK:
         print(f"\n  NACK received after {label}")
     else:
-        print(f"\n  Unexpected response 0x{byte:02x} after {label}")
+        print(f"\n  Unexpected response 0x{b:02x} after {label}")
     return False
 
 
@@ -233,51 +281,58 @@ def flash(ser: "serial.Serial", image_path: str) -> bool:
     if app_length % 4:
         img += bytes(4 - app_length % 4)
 
-    if not wait_for_dfu_ready(ser):
-        print("Error: target never responded to the DFU trigger key")
-        return False
-
-    # ── CMD_START ─────────────────────────────────────────────────────────────
-    # StartPacket: version_num (u16 LE), app_length (u16 LE), crc (u32 LE)
-    ser.write(build_packet(CMD_START, struct.pack("<HHI", 1, app_length, 0)))
-    if not wait_ack(ser, "CMD_START"):
-        send_abort(ser)
-        return False
-    print(f"[START ] version=1  length={app_length} B  ✓")
-
-    # ── CMD_DATA ──────────────────────────────────────────────────────────────
-    total        = len(img)
-    offset       = 0
-    chunk_index  = 0
-    total_chunks = (total + MAX_CHUNK - 1) // MAX_CHUNK
-
-    while offset < total:
-        chunk = bytes(img[offset: offset + MAX_CHUNK])
-        if len(chunk) % 4:
-            chunk += bytes(4 - len(chunk) % 4)
-
-        ser.write(build_packet(CMD_DATA, chunk))
-        chunk_index += 1
-
-        if not wait_ack(ser, f"CMD_DATA chunk {chunk_index}/{total_chunks}"):
-            send_abort(ser)
+    router = _RxRouter(ser)
+    router.enable()
+    try:
+        if not wait_for_dfu_ready(ser, router):
+            print("Error: target never responded to the DFU trigger key")
             return False
 
-        offset += MAX_CHUNK
-        pct    = min(100, 100 * offset // total)
-        filled = pct // 5
-        bar    = "#" * filled + "-" * (20 - filled)
-        print(f"\r[DATA  ] [{bar}] {pct:3d}%  ({chunk_index}/{total_chunks} chunks)",
-              end="", flush=True)
+        # ── CMD_START ─────────────────────────────────────────────────────────────
+        # StartPacket: version_num (u16 LE), app_length (u16 LE), crc (u32 LE)
+        ser.write(build_packet(CMD_START, struct.pack("<HHI", 1, app_length, 0)))
+        if not wait_ack(router,"CMD_START"):
+            send_abort(ser)
+            return False
+        print(f"[START ] version=1  length={app_length} B  ✓")
 
-    print()  # newline after progress bar
+        # ── CMD_DATA ──────────────────────────────────────────────────────────────
+        total        = len(img)
+        offset       = 0
+        chunk_index  = 0
+        total_chunks = (total + MAX_CHUNK - 1) // MAX_CHUNK
 
-    # ── CMD_FINISH ────────────────────────────────────────────────────────────
-    ser.write(build_packet(CMD_FINISH, bytes([0x00])))
-    if not wait_ack(ser, "CMD_FINISH"):
-        return False
-    print("[FINISH] Flash complete  ✓")
-    return True
+        while offset < total:
+            chunk = bytes(img[offset: offset + MAX_CHUNK])
+            if len(chunk) % 4:
+                chunk += bytes(4 - len(chunk) % 4)
+
+            ser.write(build_packet(CMD_DATA, chunk))
+            chunk_index += 1
+
+            if not wait_ack(router,f"CMD_DATA chunk {chunk_index}/{total_chunks}"):
+                send_abort(ser)
+                return False
+
+            offset += MAX_CHUNK
+            pct    = min(100, 100 * offset // total)
+            filled = pct // 5
+            bar    = "#" * filled + "-" * (20 - filled)
+            print(f"\r[DATA  ] [{bar}] {pct:3d}%  ({chunk_index}/{total_chunks} chunks)",
+                  end="", flush=True)
+
+        print()  # newline after progress bar
+
+        # ── CMD_FINISH ────────────────────────────────────────────────────────────
+        ser.write(build_packet(CMD_FINISH, bytes([0x00])))
+        if not wait_ack(router,"CMD_FINISH"):
+            return False
+        print("[FINISH] Flash complete  ✓")
+        return True
+
+    finally:
+        router.disable()
+        router.stop()
 
 
 # ---------------------------------------------------------------------------

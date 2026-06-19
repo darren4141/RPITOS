@@ -71,6 +71,21 @@ StatusCode uart_rx_nonblocking(uint8_t *out)
   return E_OK;
 }
 
+void uart_deinit()
+{
+  // Drain TX FIFO before touching control registers — disabling mid-byte
+  // corrupts the current character on the wire.
+  while (UART0->FR & FR_BUSY) {}
+
+  UART0->CR &= ~(CR_UARTEN | CR_TXE | CR_RXE);   // disable UART, TX, RX
+  UART0->LCRH &= ~LCRH_FEN;                      // flush + disable FIFO
+  UART0->IMSC = 0;                               // mask all interrupts
+  UART0->ICR = ICR_ALL;                          // clear any pending
+
+  gpio_set_function(14, GPIO_FUNC_INPUT);
+  gpio_set_function(15, GPIO_FUNC_INPUT);
+}
+
 // ── Full mode: ring-buffer TX + scheduler task ────────────────────────────────
 #ifndef UART_MINIMAL
 

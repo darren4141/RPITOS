@@ -38,6 +38,7 @@ void dfu_trigger_task(void *params)
       __asm__ volatile ("cpsid i" ::: "memory");
       boot_flags.dfu_requested = DFU_REQUEST;
       boot_flags.reset_reason = RESET_REASON_SOFTWARE;
+      boot_flags.magic = BOOT_FLAGS_MAGIC;
       enter_bootloader();
     }
     task_delay_ms(10);
