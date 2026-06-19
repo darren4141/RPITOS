@@ -14,20 +14,10 @@
 
 static StatusCode uart_hw_init(UartBaudrate baudrate)
 {
-  // gpio_on(16);
-  // delay_cycles(3000000);
-  // gpio_off(16);
-  // delay_cycles(3000000);
-
   gpio_set_function(14, GPIO_FUNC_ALT0);
   gpio_set_function(15, GPIO_FUNC_ALT0);
   gpio_set_pull(14, GPIO_PULL_NONE);
   gpio_set_pull(15, GPIO_PULL_NONE);
-
-  // gpio_on(16);
-  // delay_cycles(3000000);
-  // gpio_off(16);
-  // delay_cycles(3000000);
 
   uint32_t val = UART0->CR;
   val &= ~1U;
@@ -53,11 +43,6 @@ static StatusCode uart_hw_init(UartBaudrate baudrate)
   default:
     return E_INVALID_ARGS;
   }
-
-  // gpio_on(16);
-  // delay_cycles(3000000);
-  // gpio_off(16);
-  // delay_cycles(3000000);
 
   UART0->LCRH = LCRH_WLEN_8 | LCRH_FEN;
   UART0->CR = CR_UARTEN | CR_TXE | CR_RXE;

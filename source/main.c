@@ -32,16 +32,15 @@ static TaskControlBlock *tcb_dfu_trigger = NULL;
 void dfu_trigger_task(void *params)
 {
   while (1) {
-    uint8_t byte;
-    while (uart_rx_nonblocking(&byte) == E_OK) {
-      if (dfu_trigger_feed(byte)) {
-        __asm__ volatile ("cpsid i" ::: "memory");
-        boot_flags.dfu_requested = DFU_REQUEST;
-        boot_flags.reset_reason = RESET_REASON_SOFTWARE;
-        enter_bootloader();
-      }
+    // uart_printf("dfu trigger: %d\r\n", dfu_trigger_get_val());
+    if (dfu_pending) {
+      uart_print("DFU trigger received, rebooting to bootloader\r\n");
+      __asm__ volatile ("cpsid i" ::: "memory");
+      boot_flags.dfu_requested = DFU_REQUEST;
+      boot_flags.reset_reason = RESET_REASON_SOFTWARE;
+      enter_bootloader();
     }
-    task_delay_ms(1);
+    task_delay_ms(10);
   }
 }
 
@@ -103,18 +102,11 @@ void task_5_func(void *params)
 
 void kmain(void)
 {
-  // First thing: light the LED so we know the app is running
-  // even if UART isn't working yet.
   gpio_set_function(16, GPIO_FUNC_OUTPUT);
-  gpio_on(16);
-  delay_cycles(3000000);
-  gpio_off(16);
-  delay_cycles(3000000);
-
   jtag_gpio_init();
 
   uart_init(UART_BAUDRATE_115200);
-  uart_print("uart initialized!");
+  uart_print("uart initialized!\r\n");
 
   scheduler_init(&clk_freq, hz, &tick_count);
 
@@ -128,7 +120,7 @@ void kmain(void)
   task_create(task_3_func, 512, TASK_PRIORITY_4, NULL, &tcb_3);
   task_create(task_4_func, 512, TASK_PRIORITY_5, NULL, &tcb_4);
   task_create(task_5_func, 512, TASK_PRIORITY_3, NULL, &tcb_5);
-  task_create(dfu_trigger_task, 512, TASK_PRIORITY_1, NULL, &tcb_dfu_trigger);
+  task_create(dfu_trigger_task, 512, TASK_PRIORITY_5, NULL, &tcb_dfu_trigger);
 
   uart_print("Initializing GIC...\r\n");
   gic_init();
@@ -136,6 +128,7 @@ void kmain(void)
   uart_print("Initializing General Timer...\r\n");
   gentimer_init(&clk_freq, hz);
   delay_init(&tick_count);
+  dfu_trigger_reset();
   __asm__ volatile ("cpsie i" ::: "memory");
 
   schedulerStart();

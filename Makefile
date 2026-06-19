@@ -7,13 +7,14 @@ ARMGNU ?= arm-none-eabi
 
 BUILD   = build/
 TARGET  = kernel7l.img
+ELF     = kernel7l.elf
 HEX     = kernel7l.hex
 LIST    = kernel.list
 MAP     = kernel.map
 LINKER  = kernel.ld
 
 # GCC flags for bare-metal Cortex-A72 AArch32
-CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall \
+CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall -g \
          -Idrivers/inc -Iinc -Ilibraries/inc -Ikernel/inc
 
 # Source directories
@@ -28,7 +29,7 @@ OBJECTS := $(patsubst startup/%.s,   $(BUILD)%.o, $(ASM_SRCS)) \
            $(patsubst kernel/src/%.c, $(BUILD)%.o, $(filter kernel/src/%, $(C_SRCS)))
 
 # Rules
-all: $(TARGET) $(HEX) $(LIST)
+all: $(TARGET) $(ELF) $(HEX) $(LIST)
 
 rebuild: clean all
 
@@ -37,6 +38,9 @@ $(LIST): $(BUILD)output.elf
 
 $(TARGET): $(BUILD)output.elf
 	$(ARMGNU)-objcopy $(BUILD)output.elf -O binary $(TARGET)
+
+$(ELF): $(BUILD)output.elf
+	cp $(BUILD)output.elf $(ELF)
 
 $(HEX): $(BUILD)output.elf
 	$(ARMGNU)-objcopy $(BUILD)output.elf -O ihex $(HEX)
@@ -66,16 +70,17 @@ $(BUILD):
 
 clean:
 	-rm -rf $(BUILD)
-	-rm -f $(TARGET) $(HEX) $(BOOT_TARGET) $(BOOT_HEX)
+	-rm -f $(TARGET) $(ELF) $(HEX) $(BOOT_TARGET) $(BOOT_ELF) $(BOOT_HEX)
 	-rm -f $(LIST)
 	-rm -f $(MAP)
 
 # ── Bootloader ────────────────────────────────────────────────────────────────
 BOOT_BUILD  = build/boot/
 BOOT_TARGET = boot7l.img
+BOOT_ELF    = boot7l.elf
 BOOT_LINKER = boot.ld
 
-BOOT_CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall \
+BOOT_CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall -g \
               -Iboot/inc -Idrivers/inc -Ikernel/inc -Ilibraries/inc \
               -DUART_MINIMAL
 
@@ -100,13 +105,16 @@ BOOT_OBJECTS := $(patsubst boot/%.s,           $(BOOT_BUILD)%.o, $(BOOT_ASM_SRCS
 
 BOOT_HEX = boot7l.hex
 
-boot: $(BOOT_TARGET) $(BOOT_HEX)
+boot: $(BOOT_TARGET) $(BOOT_ELF) $(BOOT_HEX)
 
 $(BOOT_HEX): $(BOOT_BUILD)boot.elf
 	$(ARMGNU)-objcopy $(BOOT_BUILD)boot.elf -O ihex $(BOOT_HEX)
 
 $(BOOT_TARGET): $(BOOT_BUILD)boot.elf
 	$(ARMGNU)-objcopy $(BOOT_BUILD)boot.elf -O binary $(BOOT_TARGET)
+
+$(BOOT_ELF): $(BOOT_BUILD)boot.elf
+	cp $(BOOT_BUILD)boot.elf $(BOOT_ELF)
 
 $(BOOT_BUILD)boot.elf: $(BOOT_OBJECTS) $(BOOT_LINKER) | $(BOOT_BUILD)
 	$(ARMGNU)-ld --no-undefined $(BOOT_OBJECTS) -Map $(BOOT_BUILD)boot.map \

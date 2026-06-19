@@ -67,7 +67,10 @@ void boot_jumpToApp()
 {
   uart_print( "boot: jumping to app\r\n" );
 
-  // We might have to flush UART
+  // Wait for PL011 TX FIFO to drain before jumping — the app's uart_init()
+  // disables the UART immediately and will return E_TIMED_OUT if FR_BUSY is
+  // still set, leaving the UART in a broken state.
+  while (UART0->FR & FR_BUSY) {}
 
   // disable interrupts so bootloader IRQs do not fire in the app
   asm volatile ("cpsid if" ::: "memory");
