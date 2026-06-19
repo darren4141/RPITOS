@@ -11,7 +11,7 @@ ELF     = kernel7l.elf
 HEX     = kernel7l.hex
 LIST    = kernel.list
 MAP     = kernel.map
-LINKER  = kernel.ld
+LINKER  = source/kernel.ld
 
 # GCC flags for bare-metal Cortex-A72 AArch32
 CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall -g \
@@ -78,7 +78,7 @@ clean:
 BOOT_BUILD  = build/boot/
 BOOT_TARGET = boot7l.img
 BOOT_ELF    = boot7l.elf
-BOOT_LINKER = boot.ld
+BOOT_LINKER = boot/boot.ld
 
 BOOT_CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall -g \
               -Iboot/inc -Idrivers/inc -Ikernel/inc -Ilibraries/inc \
