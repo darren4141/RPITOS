@@ -55,3 +55,16 @@ void gic_init(void)
 
   __asm__ volatile ("dsb sy" ::: "memory");
 }
+
+void gic_disable(void)
+{
+  volatile uint32_t *gicd = (volatile uint32_t *)GICD_BASE;
+  volatile uint32_t *gicc = (volatile uint32_t *)GICC_BASE;
+
+  gicc[GICC_CTLR] = 0;
+  gicd[GICD_CTLR] = 0;
+
+  CORE_TIMER_IRQCNTL(0) &= ~(1U << 1);   // undo nCNTPNSIRQ → Core0 IRQ routing
+
+  __asm__ volatile ("dsb sy" ::: "memory");
+}

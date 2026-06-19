@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 
+#include "dfu_trigger.h"
 #include "uart.h"
 
 static List ready_list[NUM_TASK_PRIORITIES];
@@ -202,13 +203,25 @@ void task_delay_ms(uint64_t ticks)
 
 void task_delay_until_ms(uint64_t *last_wake_time, uint64_t period)
 {
-  block_until(*last_wake_time + period);
+  uint64_t next_wake = *last_wake_time + period;
+  if (*s_tick_count > next_wake) {
+    uart_printf("WARN: task overrun by %u ticks (period %u)\r\n",
+                (uint32_t)(*s_tick_count - next_wake), (uint32_t)period);
+  }
+  block_until(next_wake);
   *last_wake_time += period;
 }
 
 // Scheduler tick handler, resets timer, increments global tick_count, and checks to unblock tasks
 void __attribute__((noinline)) timer_tick_handler(void)
 {
+  uint8_t b;
+  if (uart_rx_nonblocking(&b) == E_OK) {
+    if (dfu_trigger_feed(b)) {
+      dfu_pending = 1;
+    }
+  }
+
   // Read current CVAL and advance by one interval
   uint32_t lo, hi;
   __asm__ volatile ("mrrc p15, 2, %0, %1, c14" : "=r" (lo), "=r" (hi));         // CNTP_CVAL read
@@ -241,9 +254,5 @@ void __attribute__((noinline)) timer_tick_handler(void)
     tcb->state_list_item.container = NULL;
 
     addToReadyList(&tcb);
-  }
-
-  if ((*s_tick_count % 5000) == 0) {
-    uart_print("Heartbeat\r\n");
   }
 }

@@ -49,3 +49,12 @@ StatusCode gentimer_init(uint32_t *clk_freq, uint32_t hz)
 
   return E_OK;
 }
+
+// Stops the timer from ever asserting its IRQ again. Counterpart to
+// gentimer_init() for code that needs to hand off to something that
+// doesn't expect this timer running (e.g. enter_bootloader()).
+void gentimer_disable(void)
+{
+  uint32_t ctl = 0;
+  __asm__ volatile ("mcr p15, 0, %0, c14, c2, 1" : : "r" (ctl));    // CNTP_CTL = 0
+}

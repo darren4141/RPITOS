@@ -1,0 +1,7 @@
+# Bootloader — mount sdf1 and copy as kernel7l.img
+sudo mount /dev/sdf1 /mnt/emmc
+sudo cp boot7l.img /mnt/emmc/kernel7l.img
+sudo umount /mnt/emmc
+
+# App image — write raw to sector 4096
+sudo dd if=kernel7l.img of=/dev/sdf bs=512 seek=4096 conv=notrunc status=progress

@@ -1,37 +1,28 @@
-/******************************************************************************
-*	kernel.ld
-*	 by Alex Chadwick
-*
-*	A linker script for generation of raspberry pi kernel images.
-******************************************************************************/
-
 SECTIONS {
-	.init 0x8000 : {
+	.init 0x88400 : {
 		*(.init)
 	}
-	
-	/* The rest of the code */
+
 	.text : {
 		. = ALIGN(4);
 		*(.text)
-        *(.text.*)		
+		*(.text.*)
 	}
-	
-	/* Read-only data */
-    .rodata : {
-        . = ALIGN(4);
-        *(.rodata)
-        *(.rodata.*)
-    }
+
+	.rodata : {
+		. = ALIGN(4);
+		*(.rodata)
+		*(.rodata.*)
+	}
 
 	.data : {
-        . = ALIGN(4);
+		. = ALIGN(4);
 		*(.data)
 	}
 
 	/* Zero-initialised globals. Startup code zeroes this region before calling kmain */
 	.bss : {
-        . = ALIGN(4);
+		. = ALIGN(4);
 		_bss_start = .;
 		*(.bss)
 		*(COMMON)
@@ -49,10 +40,13 @@ SECTIONS {
 		_svc_stack_bottom = .;  . += 0x1000; _svc_stack_top = .;
 	}
 
-	/*
-	* Finally comes everything else. A fun trick here is to put all other
-	* sections into this section, which will be discarded by default.
-	*/
+	/* Shared flags — must match boot.ld exactly */
+	.shared_flags 0x88000 (NOLOAD) : {
+		_shared_flags_start = .;
+		*(.shared_flags)
+		_shared_flags_end = .;
+	}
+
 	/DISCARD/ : {
 		*(*)
 	}

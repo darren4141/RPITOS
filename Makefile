@@ -7,12 +7,14 @@ ARMGNU ?= arm-none-eabi
 
 BUILD   = build/
 TARGET  = kernel7l.img
+ELF     = kernel7l.elf
+HEX     = kernel7l.hex
 LIST    = kernel.list
 MAP     = kernel.map
-LINKER  = kernel.ld
+LINKER  = source/kernel.ld
 
 # GCC flags for bare-metal Cortex-A72 AArch32
-CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall \
+CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall -g \
          -Idrivers/inc -Iinc -Ilibraries/inc -Ikernel/inc
 
 # Source directories
@@ -27,7 +29,7 @@ OBJECTS := $(patsubst startup/%.s,   $(BUILD)%.o, $(ASM_SRCS)) \
            $(patsubst kernel/src/%.c, $(BUILD)%.o, $(filter kernel/src/%, $(C_SRCS)))
 
 # Rules
-all: $(TARGET) $(LIST)
+all: $(TARGET) $(ELF) $(HEX) $(LIST)
 
 rebuild: clean all
 
@@ -36,6 +38,12 @@ $(LIST): $(BUILD)output.elf
 
 $(TARGET): $(BUILD)output.elf
 	$(ARMGNU)-objcopy $(BUILD)output.elf -O binary $(TARGET)
+
+$(ELF): $(BUILD)output.elf
+	cp $(BUILD)output.elf $(ELF)
+
+$(HEX): $(BUILD)output.elf
+	$(ARMGNU)-objcopy $(BUILD)output.elf -O ihex $(HEX)
 
 LIBGCC := $(shell $(ARMGNU)-gcc $(CFLAGS) -print-libgcc-file-name)
 
@@ -62,9 +70,76 @@ $(BUILD):
 
 clean:
 	-rm -rf $(BUILD)
-	-rm -f $(TARGET)
+	-rm -f $(TARGET) $(ELF) $(HEX) $(BOOT_TARGET) $(BOOT_ELF) $(BOOT_HEX)
 	-rm -f $(LIST)
 	-rm -f $(MAP)
+
+# ── Bootloader ────────────────────────────────────────────────────────────────
+BOOT_BUILD  = build/boot/
+BOOT_TARGET = boot7l.img
+BOOT_ELF    = boot7l.elf
+BOOT_LINKER = boot/boot.ld
+
+BOOT_CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall -g \
+              -Iboot/inc -Idrivers/inc -Ikernel/inc -Ilibraries/inc \
+              -DUART_MINIMAL
+
+BOOT_C_SRCS := boot/app/main.c \
+               $(wildcard boot/src/*.c) \
+               drivers/src/gpio.c \
+               drivers/src/jtag.c \
+               drivers/src/crc.c \
+               drivers/src/emmc.c \
+               drivers/src/uart.c \
+               kernel/src/boot_flags.c \
+               kernel/src/dfu_trigger.c
+
+BOOT_ASM_SRCS := boot/startup.s
+
+BOOT_OBJECTS := $(patsubst boot/%.s,           $(BOOT_BUILD)%.o, $(BOOT_ASM_SRCS)) \
+                $(patsubst boot/app/%.c,       $(BOOT_BUILD)%.o, $(filter boot/app/%, $(BOOT_C_SRCS))) \
+                $(patsubst boot/src/%.c,       $(BOOT_BUILD)%.o, $(filter boot/src/%, $(BOOT_C_SRCS))) \
+                $(patsubst drivers/src/%.c,    $(BOOT_BUILD)%.o, $(filter drivers/src/%, $(BOOT_C_SRCS))) \
+                $(patsubst libraries/src/%.c,  $(BOOT_BUILD)%.o, $(filter libraries/src/%, $(BOOT_C_SRCS))) \
+                $(patsubst kernel/src/%.c,     $(BOOT_BUILD)%.o, $(filter kernel/src/%, $(BOOT_C_SRCS)))
+
+BOOT_HEX = boot7l.hex
+
+boot: $(BOOT_TARGET) $(BOOT_ELF) $(BOOT_HEX)
+
+$(BOOT_HEX): $(BOOT_BUILD)boot.elf
+	$(ARMGNU)-objcopy $(BOOT_BUILD)boot.elf -O ihex $(BOOT_HEX)
+
+$(BOOT_TARGET): $(BOOT_BUILD)boot.elf
+	$(ARMGNU)-objcopy $(BOOT_BUILD)boot.elf -O binary $(BOOT_TARGET)
+
+$(BOOT_ELF): $(BOOT_BUILD)boot.elf
+	cp $(BOOT_BUILD)boot.elf $(BOOT_ELF)
+
+$(BOOT_BUILD)boot.elf: $(BOOT_OBJECTS) $(BOOT_LINKER) | $(BOOT_BUILD)
+	$(ARMGNU)-ld --no-undefined $(BOOT_OBJECTS) -Map $(BOOT_BUILD)boot.map \
+	    -o $(BOOT_BUILD)boot.elf -T $(BOOT_LINKER) $(LIBGCC)
+
+$(BOOT_BUILD)%.o: boot/%.s | $(BOOT_BUILD)
+	$(ARMGNU)-as $< -o $@
+
+$(BOOT_BUILD)%.o: boot/app/%.c | $(BOOT_BUILD)
+	$(ARMGNU)-gcc $(BOOT_CFLAGS) -c $< -o $@
+
+$(BOOT_BUILD)%.o: boot/src/%.c | $(BOOT_BUILD)
+	$(ARMGNU)-gcc $(BOOT_CFLAGS) -c $< -o $@
+
+$(BOOT_BUILD)%.o: drivers/src/%.c | $(BOOT_BUILD)
+	$(ARMGNU)-gcc $(BOOT_CFLAGS) -c $< -o $@
+
+$(BOOT_BUILD)%.o: libraries/src/%.c | $(BOOT_BUILD)
+	$(ARMGNU)-gcc $(BOOT_CFLAGS) -c $< -o $@
+
+$(BOOT_BUILD)%.o: kernel/src/%.c | $(BOOT_BUILD)
+	$(ARMGNU)-gcc $(BOOT_CFLAGS) -c $< -o $@
+
+$(BOOT_BUILD):
+	mkdir -p $(BOOT_BUILD)
 
 # ── QEMU ─────────────────────────────────────────────────────────────────────
 # Requires: qemu-system-arm in PATH
