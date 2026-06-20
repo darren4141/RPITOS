@@ -3,6 +3,7 @@
 #include <stdbool.h>
 
 #include "boot_flags.h"
+#include "crc.h"
 #include "dfu_trigger.h"
 #include "emmc.h"
 #include "uart.h"
@@ -95,9 +96,9 @@ StatusCode dfu_init()
   return E_OK;
 }
 
-// Do not uart_print anything during the dfu_receive loop, it may confuse the host
 StatusCode dfu_receive()
 {
+  dfu_init();
   dfu_trigger_reset();
   while (1) {
     uint8_t byte = uart_rx();
@@ -112,7 +113,9 @@ StatusCode dfu_receive()
 
   bool flags_crc_ok_set = false;
   uint32_t img_expected_crc;
-  uint32_t img_actual_crc;
+  uint32_t app_length = 0;
+  uint32_t bytes_hashed = 0;
+  CRC32_t crc_ctx;
 
   while (state != DFU_STATE_DONE && state != DFU_STATE_ABORT) {
     DFU_Packet packet;
@@ -136,6 +139,8 @@ StatusCode dfu_receive()
 
         const StartPacket *start_pkt = (const StartPacket *)packet.DATA;
         img_expected_crc = start_pkt->crc;
+        app_length = start_pkt->app_length;
+        crc32_start(&crc_ctx);
 
         emmc_write_blocks(EMMC_SECTOR_APP, current_sector, 1U);
         sectors_written = 1;
@@ -208,7 +213,14 @@ StatusCode dfu_receive()
           current_sector_counter += packet.LEN;
         }
 
-        // compute img_actual_crc
+        uint32_t to_hash = packet.LEN;
+        if (bytes_hashed + to_hash > app_length) {
+          to_hash = (app_length > bytes_hashed) ? app_length - bytes_hashed : 0;
+        }
+        if (to_hash > 0) {
+          crc32_update(&crc_ctx, packet.DATA, to_hash);
+          bytes_hashed += to_hash;
+        }
         uart_tx(DFU_ACK);
       }
 
@@ -219,7 +231,15 @@ StatusCode dfu_receive()
       state = DFU_STATE_ABORT;
       break;
 
-    case CMD_FINISH:
+    case CMD_FINISH: {
+      uint32_t img_actual_crc = crc32_finish(&crc_ctx);
+      uart_printf("DFU CRC | Expected: 0x%08X | Actual: 0x%08X\r\n", img_expected_crc, img_actual_crc);
+      if (img_actual_crc != img_expected_crc) {
+        uart_tx(DFU_NACK);
+        state = DFU_STATE_ABORT;
+        break;
+      }
+
       // check if we need to write one more sector
       if (unwritten_sector) {
         // Pad the final sector
@@ -233,6 +253,7 @@ StatusCode dfu_receive()
       uart_tx(DFU_ACK);
       state = DFU_STATE_DONE;
       break;
+    }
 
     case CMD_GET_STATUS:
       // send status
@@ -247,13 +268,6 @@ StatusCode dfu_receive()
   if (state == DFU_STATE_DONE) {
     boot_flags.fw_crc_ok = 1;
     return E_OK;
-    // if (img_expected_crc == img_actual_crc) {
-    // boot_flags.fw_crc_ok = 1;
-    // return E_OK;
-    // }
-    // else {
-    // return E_CORRUPTED;
-    // }
   }
   else if (state == DFU_STATE_ABORT) {
     return E_ABORTED;

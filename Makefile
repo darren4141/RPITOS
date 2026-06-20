@@ -81,6 +81,7 @@ BOOT_ELF    = boot7l.elf
 BOOT_LINKER = boot/boot.ld
 
 BOOT_CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall -g \
+              -march=armv8-a+crc \
               -Iboot/inc -Idrivers/inc -Ikernel/inc -Ilibraries/inc \
               -DUART_MINIMAL
 

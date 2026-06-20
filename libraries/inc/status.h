@@ -13,6 +13,7 @@ typedef enum {
   E_CMD                = 8,
   E_DATA               = 9,
   E_CRC                = 10,
+  E_NOTSUPP            = 11,
 } StatusCode;
 
 // Requires uart.h to be included before use.
