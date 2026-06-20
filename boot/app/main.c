@@ -100,6 +100,15 @@ void kmain(void)
     uart_printf("boot: attempt failed (%d), %u retries left\r\n", ret, retries - 1);
   }
 
-  uart_print("boot: fatal error, halting\r\n");
-  while (1) {}
+  uart_print("boot: all retries exhausted, entering DFU recovery loop\r\n");
+  while (1) {
+    dfu_receive();
+    StatusCode ret = boot_validateApp();
+    if (ret == E_OK) {
+      boot_flags.fw_crc_ok = 1;
+      boot_loadApp();
+      boot_jumpToApp();
+    }
+    uart_print("boot: DFU recovery failed, retrying\r\n");
+  }
 }

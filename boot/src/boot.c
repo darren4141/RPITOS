@@ -1,6 +1,7 @@
 #include "boot.h"
 
 #include "boot_flags.h"
+#include "crc.h"
 #include "dfu.h"
 #include "emmc.h"
 #include "memory_map.h"
@@ -18,15 +19,34 @@ StatusCode boot_init()
   return E_OK;
 }
 
-// Called from bootloader_init()'s cold-boot path (boot/app/main.c) to
-// re-derive fw_crc_ok from scratch, since no in-RAM flag can be trusted
-// after a reset that may not have preserved RAM contents.
-// STUB: always reports valid. Replace with a real CRC/signature check
-// against the eMMC-resident app image (EMMC_SECTOR_APP) before relying on
-// this in the field.
 StatusCode boot_validateApp()
 {
-  return E_OK;
+  emmc_read_blocks(EMMC_SECTOR_APP, current_sector, 1U);
+  const StartPacket *start_pkt = (const StartPacket *)current_sector;
+
+  if ((start_pkt->version_num != 1) || (start_pkt->app_length == 0)) {
+    return E_CORRUPTED;
+  }
+
+  uint32_t remaining = start_pkt->app_length;
+  uint32_t expected_crc = start_pkt->crc;
+  uint32_t sector = EMMC_SECTOR_APP + 1;
+
+  CRC32_t ctx;
+  crc32_start(&ctx);
+
+  while (remaining > 0) {
+    emmc_read_blocks(sector, current_sector, 1U);
+    uint32_t chunk = (remaining < SECTOR_SIZE) ? remaining : SECTOR_SIZE;
+    crc32_update(&ctx, current_sector, chunk);
+    remaining -= chunk;
+    sector++;
+  }
+
+  uint32_t actual_crc = crc32_finish(&ctx);
+  uart_printf("boot_validateApp CRC | Expected: 0x%08X | Actual: 0x%08X\r\n", expected_crc, actual_crc);
+
+  return (actual_crc == expected_crc) ? E_OK : E_CORRUPTED;
 }
 
 StatusCode boot_loadApp()

@@ -23,6 +23,7 @@ import struct
 import sys
 import threading
 import time
+import zlib
 
 try:
     import serial
@@ -277,6 +278,10 @@ def flash(ser: "serial.Serial", image_path: str) -> bool:
     print(f"Size  : {app_length} bytes")
     print()
 
+    # CRC covers the exact app bytes before padding — must match boot_validateApp()
+    app_crc = zlib.crc32(bytes(img[:app_length])) & 0xFFFFFFFF
+    print(f"CRC32 : 0x{app_crc:08X}")
+
     # Pad to a multiple of 4 — CMD_DATA requires LEN % 4 == 0
     if app_length % 4:
         img += bytes(4 - app_length % 4)
@@ -290,7 +295,7 @@ def flash(ser: "serial.Serial", image_path: str) -> bool:
 
         # ── CMD_START ─────────────────────────────────────────────────────────────
         # StartPacket: version_num (u16 LE), app_length (u16 LE), crc (u32 LE)
-        ser.write(build_packet(CMD_START, struct.pack("<HHI", 1, app_length, 0)))
+        ser.write(build_packet(CMD_START, struct.pack("<HHI", 1, app_length, app_crc)))
         if not wait_ack(router,"CMD_START"):
             send_abort(ser)
             return False
