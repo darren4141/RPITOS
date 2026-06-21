@@ -16,5 +16,4 @@ void semaphore_init(Semaphore *smph, uint8_t max_count);
 StatusCode semaphore_take(Semaphore *smph, int64_t delay_ms);
 StatusCode semaphore_give(Semaphore *smph);
 
-
 #endif
