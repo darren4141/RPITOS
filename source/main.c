@@ -6,6 +6,7 @@
 #include "gpio.h"
 #include "jtag.h"
 #include "mutex.h"
+#include "queue.h"
 #include "reset.h"
 #include "scheduler.h"
 #include "semaphore.h"
@@ -17,8 +18,7 @@
 
 static volatile bool gpio_state = true;
 
-static Mutex shared_mutex;
-static volatile uint32_t shared_counter = 0;
+static Queue test_queue;
 
 static Semaphore shared_semaphore;
 static volatile uint32_t shared_counter_2 = 0;
@@ -55,52 +55,34 @@ void dfu_trigger_task(void *params)
 
 void task_1_func(void *params)
 {
-  // uint64_t last_wake_time = tick_count;
   uart_print("Task 1 starting.........\r\n");
-  uint32_t count_1 = 0;
-  StatusCode ret;
+  uint32_t msg = 0;
   while (1) {
-    count_1++;
-    ret = mutex_lock(&shared_mutex, 500);
-
+    StatusCode ret = queue_send(&test_queue, &msg, 200);
     if (ret == E_OK) {
-      uart_print("mutex regained...\r\n");
+      msg++;
+      uart_printf("Task 1 | sent %u\r\n", msg);
     }
     else {
-      uart_print("mutex timed out...\r\n");
-      continue;
+      uart_printf("Task 1 | queue full, send timed out\r\n");
     }
-
-    shared_counter++;
-    uart_printf("(%u) Task 1 | acquired mutex | counter = %u\r\n", count_1, shared_counter);
-    // task_delay_until_ms(&last_wake_time, 500);
-    task_delay_ms(1000);
-    mutex_unlock(&shared_mutex);
+    task_delay_ms(100);
   }
 }
 
 void task_4_func(void *params)
 {
   uart_print("Task 4 starting.........\r\n");
-  uint32_t count_4 = 0;
-  StatusCode ret;
-
+  uint32_t recv_count = 0;
   while (1) {
-    count_4++;
-    ret = mutex_lock(&shared_mutex, 500);
-
-    if (ret == E_OK) {
-      uart_print("mutex regained...\r\n");
+    task_delay_ms(1000);
+    uart_print("Task 4 | draining queue...\r\n");
+    uint32_t msg;
+    while (queue_recv(&test_queue, &msg, 0) == E_OK) {
+      recv_count++;
+      uart_printf("Task 4 | recv [%u] msg = %u\r\n", recv_count, msg);
     }
-    else {
-      uart_print("mutex timed out...\r\n");
-      continue;
-    }
-
-    shared_counter++;
-    uart_printf("(%u) Task 4 | acquired mutex | counter = %u\r\n", count_4, shared_counter);
-    mutex_unlock(&shared_mutex);
-    task_delay_ms(250);
+    uart_print("Task 4 | queue empty\r\n");
   }
 }
 
@@ -171,8 +153,8 @@ void kmain(void)
   uart_print("Initializing General Timer...\r\n");
   gentimer_init(&clk_freq, hz);
   delay_init(&tick_count);
-  mutex_init(&shared_mutex);
-  semaphore_init(&shared_semaphore, 1);
+  queue_init(&test_queue, 4, sizeof(uint32_t));
+  semaphore_init(&shared_semaphore, 1, 1);
   dfu_trigger_reset();
   __asm__ volatile ("cpsie i" ::: "memory");
 
