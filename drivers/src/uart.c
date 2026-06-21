@@ -71,6 +71,23 @@ StatusCode uart_rx_nonblocking(uint8_t *out)
   return E_OK;
 }
 
+StatusCode uart_rx_timed(uint8_t *out, uint32_t timeout_ms)
+{
+  uint32_t frq, lo, hi;
+  asm volatile ("mrc  p15, 0, %0, c14, c0, 0" : "=r"(frq));
+  asm volatile ("mrrc p15, 0, %0, %1,  c14"   : "=r"(lo), "=r"(hi));
+  uint64_t start = ((uint64_t)hi << 32) | lo;
+  uint64_t ticks = (uint64_t)frq * timeout_ms / 1000ULL;
+  while (UART0->FR & FR_RXFE) {
+    asm volatile ("mrrc p15, 0, %0, %1, c14" : "=r"(lo), "=r"(hi));
+    if ((((uint64_t)hi << 32) | lo) - start >= ticks) {
+      return E_TIMED_OUT;
+    }
+  }
+  *out = (uint8_t)(UART0->DR & 0xFF);
+  return E_OK;
+}
+
 void uart_deinit()
 {
   // Drain TX FIFO before touching control registers — disabling mid-byte

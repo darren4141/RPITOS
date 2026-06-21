@@ -8,8 +8,10 @@
 #include "emmc.h"
 #include "uart.h"
 
-#define DFU_ACK  0x06
-#define DFU_NACK 0x15
+#define DFU_ACK               0x06
+#define DFU_NACK              0x15
+
+#define DFU_PACKET_TIMEOUT_MS 500U
 
 static uint32_t sectors_written;
 static uint8_t current_sector[SECTOR_SIZE];
@@ -17,7 +19,7 @@ static uint32_t current_sector_counter;
 static bool unwritten_sector;
 static bool started;
 
-static void dfu_packet_receive(DFU_Packet *packet)
+static StatusCode dfu_packet_receive(DFU_Packet *packet)
 {
   Packet_State state = PACKET_STATE_START;
   while (state != PACKET_STATE_SUCCESS) {
@@ -40,32 +42,45 @@ static void dfu_packet_receive(DFU_Packet *packet)
       }
       break;
 
-    case PACKET_STATE_LENGTH:
-      uint8_t byte_lsb = uart_rx();
+    case PACKET_STATE_LENGTH: {
+      uint8_t byte_lsb;
+      if (uart_rx_timed(&byte_lsb, DFU_PACKET_TIMEOUT_MS) != E_OK) {
+        return E_TIMED_OUT;
+      }
       packet->LEN = (uint16_t)((uint16_t)(byte << 8U) | byte_lsb);
       state = PACKET_STATE_PAYLOAD;
       break;
+    }
 
-    case PACKET_STATE_PAYLOAD:
+    case PACKET_STATE_PAYLOAD: {
       uint16_t remaining = 1;
       packet->DATA[0] = byte;
       while (remaining < packet->LEN) {
-        packet->DATA[remaining] = uart_rx();
+        if (uart_rx_timed(&packet->DATA[remaining], DFU_PACKET_TIMEOUT_MS) != E_OK) {
+          return E_TIMED_OUT;
+        }
         remaining++;
       }
       state = PACKET_STATE_CRC;
       break;
+    }
 
-    case PACKET_STATE_CRC:
-      uint8_t crc_b2 = uart_rx();
-      uint8_t crc_b3 = uart_rx();
-      uint8_t crc_b4 = uart_rx();
+    case PACKET_STATE_CRC: {
+      uint8_t crc_b2, crc_b3, crc_b4;
+      if (uart_rx_timed(&crc_b2, DFU_PACKET_TIMEOUT_MS) != E_OK) {
+        return E_TIMED_OUT;
+      }
+      if (uart_rx_timed(&crc_b3, DFU_PACKET_TIMEOUT_MS) != E_OK) {
+        return E_TIMED_OUT;
+      }
+      if (uart_rx_timed(&crc_b4, DFU_PACKET_TIMEOUT_MS) != E_OK) {
+        return E_TIMED_OUT;
+      }
 
-      uint32_t crc = ((uint32_t)(byte << 24U) | (uint32_t)(crc_b2 << 16U) | (uint32_t)(crc_b3 << 8U) | (crc_b4));
-
-      packet->CRC = crc;
+      packet->CRC = ((uint32_t)(byte << 24U) | (uint32_t)(crc_b2 << 16U) | (uint32_t)(crc_b3 << 8U) | crc_b4);
       state = PACKET_STATE_END;
       break;
+    }
 
     case PACKET_STATE_END:
       if (byte == 0xBB) {
@@ -84,6 +99,7 @@ static void dfu_packet_receive(DFU_Packet *packet)
       break;
     }
   }
+  return E_OK;
 }
 
 StatusCode dfu_init()
@@ -119,7 +135,10 @@ StatusCode dfu_receive()
 
   while (state != DFU_STATE_DONE && state != DFU_STATE_ABORT) {
     DFU_Packet packet;
-    dfu_packet_receive(&packet);
+    if (dfu_packet_receive(&packet) != E_OK) {
+      uart_print("DFU: session timed out\r\n");
+      return E_TIMED_OUT;
+    }
     switch (packet.CMD) {
     case CMD_REQ:
       // Send version, slot info
@@ -269,9 +288,6 @@ StatusCode dfu_receive()
     boot_flags.fw_crc_ok = 1;
     return E_OK;
   }
-  else if (state == DFU_STATE_ABORT) {
-    return E_ABORTED;
-  }
 
-  return E_OK;
+  return E_ABORTED;
 }

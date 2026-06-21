@@ -8,6 +8,8 @@ extern TaskControlBlock *p_task_control_block;
 
 StatusCode scheduler_init(volatile uint32_t *p_clk_freq, uint32_t new_hz, volatile uint64_t *p_tick_count);
 
+TaskControlBlock *scheduler_get_current_task();
+
 StatusCode schedulerStart(void);
 
 StatusCode addToReadyList(TaskControlBlock **tcb);
