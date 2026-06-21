@@ -54,9 +54,19 @@ void task_1_func(void *params)
   // uint64_t last_wake_time = tick_count;
   uart_print("Task 1 starting.........\r\n");
   uint32_t count_1 = 0;
+  StatusCode ret;
   while (1) {
     count_1++;
-    mutex_lock(&shared_mutex);
+    ret = mutex_lock(&shared_mutex, 500);
+
+    if (ret == E_OK) {
+      uart_print("mutex regained...\r\n");
+    }
+    else {
+      uart_print("mutex timed out...\r\n");
+      continue;
+    }
+
     shared_counter++;
     uart_printf("(%u) Task 1 | acquired mutex | counter = %u\r\n", count_1, shared_counter);
     // task_delay_until_ms(&last_wake_time, 500);
@@ -69,9 +79,20 @@ void task_4_func(void *params)
 {
   uart_print("Task 4 starting.........\r\n");
   uint32_t count_4 = 0;
+  StatusCode ret;
+
   while (1) {
     count_4++;
-    mutex_lock(&shared_mutex);
+    ret = mutex_lock(&shared_mutex, 500);
+
+    if (ret == E_OK) {
+      uart_print("mutex regained...\r\n");
+    }
+    else {
+      uart_print("mutex timed out...\r\n");
+      continue;
+    }
+
     shared_counter++;
     uart_printf("(%u) Task 4 | acquired mutex | counter = %u\r\n", count_4, shared_counter);
     mutex_unlock(&shared_mutex);

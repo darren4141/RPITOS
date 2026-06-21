@@ -16,32 +16,61 @@ void mutex_init(Mutex *mtx)
   mtx->state = MUTEX_STATE_UNLOCKED;
 }
 
-void mutex_lock(Mutex *mtx)
+static void mutex_add_to_blocked_list(Mutex *mtx, TaskControlBlock *tcb)
+{
+  ListItem *ei  = &tcb->event_list_item;
+  ei->owner     = tcb;
+  ei->container = &mtx->mutex_blocked_list;
+  ei->next      = NULL;
+  ei->prev      = mtx->mutex_blocked_list.list_end;
+
+  if (mtx->mutex_blocked_list.list_end != NULL) {
+    mtx->mutex_blocked_list.list_end->next = ei;
+  }
+  else {
+    mtx->mutex_blocked_list.head = ei;
+  }
+  mtx->mutex_blocked_list.list_end = ei;
+  mtx->mutex_blocked_list.num_items++;
+}
+
+StatusCode mutex_lock(Mutex *mtx, int64_t delay_ms)
 {
   uint32_t cpsr = enter_critical();
   TaskControlBlock *cur_tcb = scheduler_get_current_task();
 
-  if (mtx->state == MUTEX_STATE_LOCKED) {
-    if (mtx->mutex_blocked_list.num_items == 0) {
-      mtx->mutex_blocked_list.head = &cur_tcb->event_list_item;
-    }
-    else {
-      mtx->mutex_blocked_list.list_end->next = &cur_tcb->event_list_item;
-    }
-    mtx->mutex_blocked_list.num_items++;
-    mtx->mutex_blocked_list.list_end = &cur_tcb->event_list_item;
-
-    removeFromReadyList(&cur_tcb);
-    cur_tcb->currentState = TASK_STATE_BLOCKED;
-    exit_critical(cpsr);
-
-    while (cur_tcb->currentState == TASK_STATE_BLOCKED) {}
-  }
-  else if (mtx->state == MUTEX_STATE_UNLOCKED) {
+  if (mtx->state == MUTEX_STATE_UNLOCKED) {
     mtx->state = MUTEX_STATE_LOCKED;
     mtx->mutex_owner = cur_tcb;
     exit_critical(cpsr);
+    return E_OK;
   }
+
+  // Mutex is locked.
+  if (delay_ms == 0) {
+    exit_critical(cpsr);
+    return E_TIMED_OUT;
+  }
+
+  mutex_add_to_blocked_list(mtx, cur_tcb);
+  removeFromReadyList(&cur_tcb);
+
+  if (delay_ms > 0) {
+    scheduler_add_to_blocked_list(cur_tcb, scheduler_get_tick_count() + (uint64_t)delay_ms);
+  }
+
+  cur_tcb->currentState = TASK_STATE_BLOCKED;
+  exit_critical(cpsr);
+
+  while (cur_tcb->currentState == TASK_STATE_BLOCKED) {}
+
+  // Check wakeup reason under a critical section so neither the timer nor
+  // another task can mutate mutex_owner between the read and the return.
+  uint32_t cpsr2 = enter_critical();
+  StatusCode result = (mtx->mutex_owner == cur_tcb) ? E_OK : E_TIMED_OUT;
+  exit_critical(cpsr2);
+
+  return result;
 }
 
 void mutex_unlock(Mutex *mtx)
@@ -53,15 +82,29 @@ void mutex_unlock(Mutex *mtx)
       mtx->state = MUTEX_STATE_UNLOCKED;
     }
     else {
-      mtx->mutex_owner = mtx->mutex_blocked_list.head->owner;
-      mtx->mutex_blocked_list.head = mtx->mutex_blocked_list.head->next;
-      mtx->mutex_blocked_list.num_items--;
+      TaskControlBlock *next_owner = mtx->mutex_blocked_list.head->owner;
+      ListItem *ei = &next_owner->event_list_item;
 
+      // Pop head from mutex blocked list
+      mtx->mutex_blocked_list.head = ei->next;
+      if (mtx->mutex_blocked_list.head != NULL) {
+        mtx->mutex_blocked_list.head->prev = NULL;
+      }
+      mtx->mutex_blocked_list.num_items--;
       if (mtx->mutex_blocked_list.num_items == 0) {
         mtx->mutex_blocked_list.list_end = NULL;
       }
 
-      addToReadyList(&mtx->mutex_owner);
+      ei->next = NULL;
+      ei->prev = NULL;
+      ei->container = NULL;
+
+      mtx->mutex_owner = next_owner;
+
+      // Cancel the pending timeout if the waiter was also in blocked_task_list.
+      // No-op for infinite-wait tasks (delay_ms < 0) that were never added there.
+      scheduler_remove_from_blocked_list(next_owner);
+      addToReadyList(&next_owner);
     }
   }
   exit_critical(cpsr);

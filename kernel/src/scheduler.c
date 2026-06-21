@@ -157,15 +157,21 @@ StatusCode schedulerStart(void)
   return E_OK;
 }
 
-static void block_until(uint64_t wakeup_time)
+uint64_t scheduler_get_tick_count(void)
 {
-  volatile TaskControlBlock *my_tcb = p_task_control_block;
-  p_task_control_block->wakeup_time = wakeup_time;
+  return *s_tick_count;
+}
 
-  removeFromReadyList(&p_task_control_block);
+StatusCode scheduler_add_to_blocked_list(TaskControlBlock *tcb, uint64_t wakeup_time)
+{
+  if (tcb == NULL) {
+    return E_INVALID_ARGS;
+  }
 
-  ListItem *item = &p_task_control_block->state_list_item;
-  item->owner = p_task_control_block;
+  tcb->wakeup_time = wakeup_time;
+
+  ListItem *item = &tcb->state_list_item;
+  item->owner = tcb;
   item->container = &blocked_task_list;
   item->next = NULL;
   item->prev = NULL;
@@ -196,6 +202,49 @@ static void block_until(uint64_t wakeup_time)
   }
 
   blocked_task_list.num_items++;
+  return E_OK;
+}
+
+StatusCode scheduler_remove_from_blocked_list(TaskControlBlock *tcb)
+{
+  if (tcb == NULL) {
+    return E_INVALID_ARGS;
+  }
+
+  ListItem *item = &tcb->state_list_item;
+
+  if (item->container != &blocked_task_list) {
+    return E_OK;
+  }
+
+  if (item->prev != NULL) {
+    item->prev->next = item->next;
+  }
+  else {
+    blocked_task_list.head = item->next;
+  }
+
+  if (item->next != NULL) {
+    item->next->prev = item->prev;
+  }
+  else {
+    blocked_task_list.list_end = item->prev;
+  }
+
+  blocked_task_list.num_items--;
+  item->next = NULL;
+  item->prev = NULL;
+  item->container = NULL;
+
+  return E_OK;
+}
+
+static void block_until(uint64_t wakeup_time)
+{
+  volatile TaskControlBlock *my_tcb = p_task_control_block;
+
+  removeFromReadyList(&p_task_control_block);
+  scheduler_add_to_blocked_list(p_task_control_block, wakeup_time);
   p_task_control_block->currentState = TASK_STATE_BLOCKED;
 
   while (my_tcb->currentState == TASK_STATE_BLOCKED) {}
@@ -243,7 +292,7 @@ void __attribute__((noinline)) timer_tick_handler(void)
   while (blocked_task_list.head != NULL && *s_tick_count >= blocked_task_list.head->owner->wakeup_time) {
     TaskControlBlock *tcb = blocked_task_list.head->owner;
 
-    // Pop the head
+    // Pop from blocked_task_list
     blocked_task_list.head = blocked_task_list.head->next;
     if (blocked_task_list.head != NULL) {
       blocked_task_list.head->prev = NULL;
@@ -253,10 +302,32 @@ void __attribute__((noinline)) timer_tick_handler(void)
     }
     blocked_task_list.num_items--;
 
-    // Clear item links so addToReadyList can re-use the state_list_item
     tcb->state_list_item.next = NULL;
     tcb->state_list_item.prev = NULL;
     tcb->state_list_item.container = NULL;
+
+    // If the task was also waiting on a mutex/semaphore, remove it from that
+    // list too so the owner cannot hand it the lock after it has timed out.
+    ListItem *ei = &tcb->event_list_item;
+    if (ei->container != NULL) {
+      List *event_list = ei->container;
+      if (ei->prev != NULL) {
+        ei->prev->next = ei->next;
+      }
+      else {
+        event_list->head = ei->next;
+      }
+      if (ei->next != NULL) {
+        ei->next->prev = ei->prev;
+      }
+      else {
+        event_list->list_end = ei->prev;
+      }
+      event_list->num_items--;
+      ei->next = NULL;
+      ei->prev = NULL;
+      ei->container = NULL;
+    }
 
     addToReadyList(&tcb);
   }
