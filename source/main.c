@@ -8,6 +8,7 @@
 #include "mutex.h"
 #include "reset.h"
 #include "scheduler.h"
+#include "semaphore.h"
 #include "task.h"
 #include "uart.h"
 
@@ -18,6 +19,9 @@ static volatile bool gpio_state = true;
 
 static Mutex shared_mutex;
 static volatile uint32_t shared_counter = 0;
+
+static Semaphore shared_semaphore;
+static volatile uint32_t shared_counter_2 = 0;
 
 static volatile uint32_t clk_freq;
 static volatile uint64_t tick_count = 0;
@@ -103,21 +107,27 @@ void task_4_func(void *params)
 void task_2_func(void *params)
 {
   uart_print("Task 2 starting.........\r\n");
-  uint32_t count_2 = 0;
   while (1) {
-    count_2++;
-    uart_printf("(%d) Task 2 | %d | %d | %d |\r\n", count_2, (uint32_t)tcb_2->p_Stack, (uint32_t)tcb_2->p_TopOfStack, (uint32_t)tcb_2->p_EndOfStack);
     task_delay_ms(1000);
+    semaphore_give(&shared_semaphore);
+    uart_print("Task 1 | giving semaphore\r\n");
   }
 }
 
 void task_3_func(void *params)
 {
   uart_print("Task 3 starting.........\r\n");
-  uint32_t count_3 = 0;
   while (1) {
-    count_3++;
-    uart_printf("(%d) Task 3 | %d | %d | %d |\r\n", count_3, (uint32_t)tcb_3->p_Stack, (uint32_t)tcb_3->p_TopOfStack, (uint32_t)tcb_3->p_EndOfStack);
+    StatusCode ret = semaphore_take(&shared_semaphore, 100);
+
+    if (ret == E_OK) {
+      shared_counter_2++;
+      uart_printf("Task 4 | semaphore taken - %u\r\n", shared_counter_2);
+    }
+    else {
+      uart_print("Task 4 | semaphore timed out\r\n");
+    }
+
     task_delay_ms(100);
   }
 }
@@ -162,6 +172,7 @@ void kmain(void)
   gentimer_init(&clk_freq, hz);
   delay_init(&tick_count);
   mutex_init(&shared_mutex);
+  semaphore_init(&shared_semaphore, 1);
   dfu_trigger_reset();
   __asm__ volatile ("cpsie i" ::: "memory");
 
