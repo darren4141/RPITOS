@@ -18,11 +18,11 @@ void mutex_init(Mutex *mtx)
 
 static void mutex_add_to_blocked_list(Mutex *mtx, TaskControlBlock *tcb)
 {
-  ListItem *ei  = &tcb->event_list_item;
-  ei->owner     = tcb;
+  ListItem *ei = &tcb->event_list_item;
+  ei->owner = tcb;
   ei->container = &mtx->mutex_blocked_list;
-  ei->next      = NULL;
-  ei->prev      = mtx->mutex_blocked_list.list_end;
+  ei->next = NULL;
+  ei->prev = mtx->mutex_blocked_list.list_end;
 
   if (mtx->mutex_blocked_list.list_end != NULL) {
     mtx->mutex_blocked_list.list_end->next = ei;
@@ -34,7 +34,7 @@ static void mutex_add_to_blocked_list(Mutex *mtx, TaskControlBlock *tcb)
   mtx->mutex_blocked_list.num_items++;
 }
 
-StatusCode mutex_lock(Mutex *mtx, int64_t delay_ms)
+StatusCode mutex_lock(Mutex *mtx, int64_t timeout_ms)
 {
   uint32_t cpsr = enter_critical();
   TaskControlBlock *cur_tcb = scheduler_get_current_task();
@@ -47,7 +47,7 @@ StatusCode mutex_lock(Mutex *mtx, int64_t delay_ms)
   }
 
   // Mutex is locked.
-  if (delay_ms == 0) {
+  if (timeout_ms == 0) {
     exit_critical(cpsr);
     return E_TIMED_OUT;
   }
@@ -55,8 +55,8 @@ StatusCode mutex_lock(Mutex *mtx, int64_t delay_ms)
   mutex_add_to_blocked_list(mtx, cur_tcb);
   removeFromReadyList(&cur_tcb);
 
-  if (delay_ms > 0) {
-    scheduler_add_to_blocked_list(cur_tcb, scheduler_get_tick_count() + (uint64_t)delay_ms);
+  if (timeout_ms > 0) {
+    scheduler_add_to_blocked_list(cur_tcb, scheduler_get_tick_count() + (uint64_t)timeout_ms);
   }
 
   cur_tcb->currentState = TASK_STATE_BLOCKED;
@@ -102,7 +102,7 @@ void mutex_unlock(Mutex *mtx)
       mtx->mutex_owner = next_owner;
 
       // Cancel the pending timeout if the waiter was also in blocked_task_list.
-      // No-op for infinite-wait tasks (delay_ms < 0) that were never added there.
+      // No-op for infinite-wait tasks (timeout_ms < 0) that were never added there.
       scheduler_remove_from_blocked_list(next_owner);
       addToReadyList(&next_owner);
     }

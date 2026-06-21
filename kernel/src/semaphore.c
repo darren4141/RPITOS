@@ -23,10 +23,10 @@ static void semaphore_add_to_blocked_list(Semaphore *smph, TaskControlBlock *tcb
   smph->semaphore_blocked_list.num_items++;
 }
 
-void semaphore_init(Semaphore *smph, uint8_t max_count)
+void semaphore_init(Semaphore *smph, uint32_t max_count, uint32_t initial_count)
 {
   smph->max_count = max_count;
-  smph->count = max_count;
+  smph->count = initial_count;
 
   smph->semaphore_blocked_list.head = NULL;
   smph->semaphore_blocked_list.index = NULL;
@@ -34,9 +34,9 @@ void semaphore_init(Semaphore *smph, uint8_t max_count)
   smph->semaphore_blocked_list.num_items = 0;
 }
 
-StatusCode semaphore_take(Semaphore *smph, int64_t delay_ms)
+StatusCode semaphore_take(Semaphore *smph, int64_t timeout_ms)
 {
-  uint64_t deadline = (delay_ms > 0) ? scheduler_get_tick_count() + (uint64_t)delay_ms : 0;
+  uint64_t deadline = (timeout_ms > 0) ? scheduler_get_tick_count() + (uint64_t)timeout_ms : 0;
   TaskControlBlock *cur_tcb = scheduler_get_current_task();
 
   while (1) {
@@ -48,12 +48,12 @@ StatusCode semaphore_take(Semaphore *smph, int64_t delay_ms)
       return E_OK;
     }
 
-    if (delay_ms == 0) {
+    if (timeout_ms == 0) {
       exit_critical(cpsr);
       return E_TIMED_OUT;
     }
 
-    if ((delay_ms > 0) && (scheduler_get_tick_count() >= deadline)) {
+    if ((timeout_ms > 0) && (scheduler_get_tick_count() >= deadline)) {
       exit_critical(cpsr);
       return E_TIMED_OUT;
     }
@@ -61,7 +61,7 @@ StatusCode semaphore_take(Semaphore *smph, int64_t delay_ms)
     semaphore_add_to_blocked_list(smph, cur_tcb);
     removeFromReadyList(&cur_tcb);
 
-    if (delay_ms > 0) {
+    if (timeout_ms > 0) {
       scheduler_add_to_blocked_list(cur_tcb, deadline);
     }
 

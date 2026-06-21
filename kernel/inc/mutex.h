@@ -18,7 +18,7 @@ struct Mutex {
 };
 
 void mutex_init(Mutex *mtx);
-StatusCode mutex_lock(Mutex *mtx, int64_t delay_ms);
+StatusCode mutex_lock(Mutex *mtx, int64_t timeout_ms);
 void mutex_unlock(Mutex *mtx);
 
 #endif
