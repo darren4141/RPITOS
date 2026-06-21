@@ -1,6 +1,7 @@
 #ifndef MUTEX_H
 #define MUTEX_H
 
+#include "status.h"
 #include "task_types.h"
 
 typedef struct Mutex Mutex;
@@ -17,7 +18,7 @@ struct Mutex {
 };
 
 void mutex_init(Mutex *mtx);
-void mutex_lock(Mutex *mtx);
+StatusCode mutex_lock(Mutex *mtx, int64_t delay_ms);
 void mutex_unlock(Mutex *mtx);
 
 #endif
