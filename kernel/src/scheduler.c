@@ -42,6 +42,11 @@ StatusCode scheduler_init(volatile uint32_t *p_clk_freq, uint32_t new_hz, volati
   return E_OK;
 }
 
+TaskControlBlock *scheduler_get_current_task()
+{
+  return p_task_control_block;
+}
+
 // Adds a task to the back of the ready list of its respective priority
 StatusCode addToReadyList(TaskControlBlock **tcb)
 {

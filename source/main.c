@@ -5,6 +5,7 @@
 #include "gic.h"
 #include "gpio.h"
 #include "jtag.h"
+#include "mutex.h"
 #include "reset.h"
 #include "scheduler.h"
 #include "task.h"
@@ -14,6 +15,9 @@
 #include <stdint.h>
 
 static volatile bool gpio_state = true;
+
+static Mutex shared_mutex;
+static volatile uint32_t shared_counter = 0;
 
 static volatile uint32_t clk_freq;
 static volatile uint64_t tick_count = 0;
@@ -47,13 +51,31 @@ void dfu_trigger_task(void *params)
 
 void task_1_func(void *params)
 {
-  uint64_t last_wake_time = tick_count;
+  // uint64_t last_wake_time = tick_count;
   uart_print("Task 1 starting.........\r\n");
   uint32_t count_1 = 0;
   while (1) {
     count_1++;
-    uart_printf("(%d) Task 1 | %d | %d | %d |\r\n", count_1, (uint32_t)tcb_1->p_Stack, (uint32_t)tcb_1->p_TopOfStack, (uint32_t)tcb_1->p_EndOfStack);
-    task_delay_until_ms(&last_wake_time, 500);
+    mutex_lock(&shared_mutex);
+    shared_counter++;
+    uart_printf("(%u) Task 1 | acquired mutex | counter = %u\r\n", count_1, shared_counter);
+    // task_delay_until_ms(&last_wake_time, 500);
+    task_delay_ms(1000);
+    mutex_unlock(&shared_mutex);
+  }
+}
+
+void task_4_func(void *params)
+{
+  uart_print("Task 4 starting.........\r\n");
+  uint32_t count_4 = 0;
+  while (1) {
+    count_4++;
+    mutex_lock(&shared_mutex);
+    shared_counter++;
+    uart_printf("(%u) Task 4 | acquired mutex | counter = %u\r\n", count_4, shared_counter);
+    mutex_unlock(&shared_mutex);
+    task_delay_ms(250);
   }
 }
 
@@ -76,17 +98,6 @@ void task_3_func(void *params)
     count_3++;
     uart_printf("(%d) Task 3 | %d | %d | %d |\r\n", count_3, (uint32_t)tcb_3->p_Stack, (uint32_t)tcb_3->p_TopOfStack, (uint32_t)tcb_3->p_EndOfStack);
     task_delay_ms(100);
-  }
-}
-
-void task_4_func(void *params)
-{
-  uart_print("Task 4 starting.........\r\n");
-  uint32_t count_4 = 0;
-  while (1) {
-    count_4++;
-    uart_printf("(%d) Task 4 | %d | %d | %d |\r\n", count_4, (uint32_t)tcb_4->p_Stack, (uint32_t)tcb_4->p_TopOfStack, (uint32_t)tcb_4->p_EndOfStack);
-    task_delay_ms(250);
   }
 }
 
@@ -129,6 +140,7 @@ void kmain(void)
   uart_print("Initializing General Timer...\r\n");
   gentimer_init(&clk_freq, hz);
   delay_init(&tick_count);
+  mutex_init(&shared_mutex);
   dfu_trigger_reset();
   __asm__ volatile ("cpsie i" ::: "memory");
 

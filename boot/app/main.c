@@ -4,6 +4,7 @@
 #include "boot.h"
 #include "boot_flags.h"
 #include "dfu.h"
+#include "dfu_trigger.h"
 #include "emmc.h"
 #include "jtag.h"
 #include "status.h"
@@ -17,7 +18,42 @@
 
 
 static void bootloader_init();
+static void bootloader_recovery_window();
 static StatusCode bootloader_execute();
+
+static void bootloader_recovery_window()
+{
+  if (boot_flags.dfu_requested == DFU_REQUEST) {
+    return;
+  }
+
+  uart_print("boot: recovery window open (100ms) — send DFU trigger to override\r\n");
+
+  uint32_t frq, lo, hi;
+  asm volatile ("mrc  p15, 0, %0, c14, c0, 0" : "=r" (frq));
+  asm volatile ("mrrc p15, 0, %0, %1,  c14"   : "=r" (lo), "=r" (hi));
+  uint64_t start = ((uint64_t)hi << 32) | lo;
+  uint64_t ticks = (uint64_t)frq * 1000 / 1000;
+
+  dfu_trigger_reset();
+
+  while (1) {
+    asm volatile ("mrrc p15, 0, %0, %1, c14" : "=r" (lo), "=r" (hi));
+    if ((((uint64_t)hi << 32) | lo) - start >= ticks) {
+      uart_print("boot: recovery window closed\r\n");
+      boot_flags.dfu_requested = DFU_REQUEST;
+      break;
+    }
+    uint8_t byte;
+    if ((uart_rx_nonblocking(&byte) == E_OK) && dfu_trigger_feed(byte)) {
+      uart_print("boot: DFU trigger received in recovery window\r\n");
+      boot_flags.dfu_requested = DFU_REQUEST;
+      boot_flags.reset_reason = RESET_REASON_SOFTWARE;
+      dfu_trigger_reset();
+      break;
+    }
+  }
+}
 
 static void bootloader_init()
 {
@@ -94,6 +130,7 @@ static StatusCode bootloader_execute()
 void kmain(void)
 {
   bootloader_init();
+  bootloader_recovery_window();
 
   for (uint32_t retries = NUM_RETRIES; retries > 0; retries--) {
     StatusCode ret = bootloader_execute();
