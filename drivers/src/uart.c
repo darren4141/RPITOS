@@ -6,9 +6,13 @@
 #include <stdint.h>
 
 #ifndef UART_MINIMAL
+#include "interrupts.h"
+#include "semaphore.h"
 #include "task.h"
 #include "task_types.h"
 #endif
+
+static Semaphore uart_data_ready;
 
 // ── Hardware init (shared) ────────────────────────────────────────────────────
 
@@ -74,12 +78,12 @@ StatusCode uart_rx_nonblocking(uint8_t *out)
 StatusCode uart_rx_timed(uint8_t *out, uint32_t timeout_ms)
 {
   uint32_t frq, lo, hi;
-  asm volatile ("mrc  p15, 0, %0, c14, c0, 0" : "=r"(frq));
-  asm volatile ("mrrc p15, 0, %0, %1,  c14"   : "=r"(lo), "=r"(hi));
+  asm volatile ("mrc  p15, 0, %0, c14, c0, 0" : "=r" (frq));
+  asm volatile ("mrrc p15, 0, %0, %1,  c14"   : "=r" (lo), "=r" (hi));
   uint64_t start = ((uint64_t)hi << 32) | lo;
   uint64_t ticks = (uint64_t)frq * timeout_ms / 1000ULL;
   while (UART0->FR & FR_RXFE) {
-    asm volatile ("mrrc p15, 0, %0, %1, c14" : "=r"(lo), "=r"(hi));
+    asm volatile ("mrrc p15, 0, %0, %1, c14" : "=r" (lo), "=r" (hi));
     if ((((uint64_t)hi << 32) | lo) - start >= ticks) {
       return E_TIMED_OUT;
     }
@@ -116,11 +120,10 @@ static bool uart_task_started = false;
 void uart_tx_task(void *params)
 {
   while (1) {
-    if (p_uart_buf_right != p_uart_buf_left) {
-      p_uart_buf_left++;
-      if (p_uart_buf_left >= UART_BUFFER_SIZE) {
-        p_uart_buf_left = 0;
-      }
+    semaphore_take(&uart_data_ready, SEMAPHORE_TAKE_BLOCKING);
+
+    while (p_uart_buf_right != p_uart_buf_left) {
+      p_uart_buf_left = (p_uart_buf_left + 1) % UART_BUFFER_SIZE;
       uart_tx_raw(uart_buf[p_uart_buf_left]);
     }
   }
@@ -134,10 +137,13 @@ StatusCode uart_init(UartBaudrate baudrate)
 
 StatusCode uart_task_start(void)
 {
-  StatusCode ret = task_create(uart_tx_task, 512, TASK_PRIORITY_2, NULL, &uart_tcb);
+  StatusCode ret = task_create(uart_tx_task, 512, TASK_PRIORITY_5, NULL, &uart_tcb);
   if (ret == E_OK) {
     uart_task_started = true;
   }
+
+  semaphore_init(&uart_data_ready, 1, 0);
+
   return ret;
 }
 
@@ -155,17 +161,26 @@ void uart_tx(uint8_t byte)
   p_uart_buf_right = next;
 }
 
+void uart_send_byte(uint8_t byte)
+{
+  uart_tx(byte);
+  semaphore_give(&uart_data_ready);
+}
+
 void uart_print(const char *str)
 {
+  uint32_t cpsr;
+
   if (uart_task_started) {
-    __asm__ volatile ("cpsid i" ::: "memory");
+    cpsr = enter_critical();
   }
   while (*str) {
     uart_tx((uint8_t)*str++);
   }
   if (uart_task_started) {
-    __asm__ volatile ("cpsie i" ::: "memory");
+    exit_critical(cpsr);
   }
+  semaphore_give(&uart_data_ready);
 }
 
 static void print_uint(uint32_t n, uint32_t base, const char *digits, int width, char pad)
@@ -186,8 +201,10 @@ static void print_uint(uint32_t n, uint32_t base, const char *digits, int width,
 
 void uart_printf(const char *fmt, ...)
 {
+  uint32_t cpsr;
+
   if (uart_task_started) {
-    __asm__ volatile ("cpsid i" ::: "memory");
+    cpsr = enter_critical();
   }
   va_list args;
   va_start(args, fmt);
@@ -231,8 +248,10 @@ void uart_printf(const char *fmt, ...)
 
   va_end(args);
   if (uart_task_started) {
-    __asm__ volatile ("cpsie i" ::: "memory");
+    exit_critical(cpsr);
   }
+
+  semaphore_give(&uart_data_ready);
 }
 
 // ── Minimal mode: blocking TX, no task, no ring buffer ────────────────────────
