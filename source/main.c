@@ -92,7 +92,7 @@ void task_2_func(void *params)
   while (1) {
     task_delay_ms(1000);
     semaphore_give(&shared_semaphore);
-    uart_print("Task 1 | giving semaphore\r\n");
+    uart_print("Task 2 | giving semaphore\r\n");
   }
 }
 
@@ -104,10 +104,10 @@ void task_3_func(void *params)
 
     if (ret == E_OK) {
       shared_counter_2++;
-      uart_printf("Task 4 | semaphore taken - %u\r\n", shared_counter_2);
+      uart_printf("Task 3 | semaphore taken - %u\r\n", shared_counter_2);
     }
     else {
-      uart_print("Task 4 | semaphore timed out\r\n");
+      uart_print("Task 3 | semaphore timed out\r\n");
     }
 
     task_delay_ms(100);
@@ -144,7 +144,7 @@ void kmain(void)
   task_create(task_2_func, 512, TASK_PRIORITY_3, NULL, &tcb_2);
   task_create(task_3_func, 512, TASK_PRIORITY_4, NULL, &tcb_3);
   task_create(task_4_func, 512, TASK_PRIORITY_5, NULL, &tcb_4);
-  task_create(task_5_func, 512, TASK_PRIORITY_3, NULL, &tcb_5);
+  task_create(task_5_func, 512, TASK_PRIORITY_1, NULL, &tcb_5);
   task_create(dfu_trigger_task, 512, TASK_PRIORITY_5, NULL, &tcb_dfu_trigger);
 
   uart_print("Initializing GIC...\r\n");

@@ -69,9 +69,8 @@ void uart_deinit();
 
 #ifndef UART_MINIMAL
 StatusCode uart_task_start(void);
-#endif
-
 void uart_send_byte(uint8_t byte);
+#endif
 uint8_t uart_rx();
 StatusCode uart_rx_nonblocking(uint8_t *out);
 StatusCode uart_rx_timed(uint8_t *out, uint32_t timeout_ms);

@@ -7,7 +7,7 @@
 #define TASK_WATERMARK 0x5A
 
 typedef enum {
-  TASK_PRIORITY_0 = 0,
+  TASK_PRIORITY_IDLE = 0,
   TASK_PRIORITY_1 = 1,
   TASK_PRIORITY_2 = 2,
   TASK_PRIORITY_3 = 3,

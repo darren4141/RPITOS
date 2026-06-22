@@ -105,4 +105,6 @@ StatusCode semaphore_give(Semaphore *smph)
   }
 
   exit_critical(cpsr);
+
+  return E_OK;
 }

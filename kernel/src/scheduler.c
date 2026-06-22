@@ -15,6 +15,16 @@ static volatile uint32_t *s_clk_freq;
 static volatile uint64_t *s_tick_count;
 static uint32_t hz;
 
+#define IDLE_STACK_DEPTH 64
+static TaskControlBlock idle_tcb;
+static StackType_t idle_stack[IDLE_STACK_DEPTH];
+
+static void idle_task_func(void *params)
+{
+  (void)params;
+  while (1) {}
+}
+
 // Initialize scheduler, link clk_freq, tick_count, and initialize ready lists
 StatusCode scheduler_init(volatile uint32_t *p_clk_freq, uint32_t new_hz, volatile uint64_t *p_tick_count)
 {
@@ -38,6 +48,29 @@ StatusCode scheduler_init(volatile uint32_t *p_clk_freq, uint32_t new_hz, volati
   blocked_task_list.index = NULL;
   blocked_task_list.list_end = NULL;
   blocked_task_list.num_items = 0;
+
+  // Initialize idle task stack — mirrors initializeTaskStack() in task.c
+  StackType_t *top = &idle_stack[IDLE_STACK_DEPTH - 1];
+  *top-- = 0x00000013U;                     // SPSR: SVC mode, IRQs enabled
+  *top-- = (StackType_t)idle_task_func;     // PC
+  for (int i = 12; i >= 1; i--) {
+    *top-- = 0U;                            // R12–R1
+  }
+  *top = 0U;                                // R0 (params)
+
+  idle_tcb.p_Stack = idle_stack;
+  idle_tcb.p_EndOfStack = &idle_stack[IDLE_STACK_DEPTH - 1];
+  idle_tcb.p_TopOfStack = top;
+  idle_tcb.stackDepth = IDLE_STACK_DEPTH;
+  idle_tcb.taskId = 0xFFFFU;
+  idle_tcb.priority = TASK_PRIORITY_IDLE;
+  idle_tcb.currentState = TASK_STATE_READY;
+  idle_tcb.wakeup_time = 0U;
+  idle_tcb.state_list_item = (ListItem) { NULL, NULL, &idle_tcb, NULL };
+  idle_tcb.event_list_item = (ListItem) { NULL, NULL, &idle_tcb, NULL };
+
+  TaskControlBlock *p_idle = &idle_tcb;
+  addToReadyList(&p_idle);
 
   return E_OK;
 }
