@@ -137,12 +137,12 @@ StatusCode uart_init(UartBaudrate baudrate)
 
 StatusCode uart_task_start(void)
 {
+  semaphore_init(&uart_data_ready, 1, 0);
+
   StatusCode ret = task_create(uart_tx_task, 512, TASK_PRIORITY_5, NULL, &uart_tcb);
   if (ret == E_OK) {
     uart_task_started = true;
   }
-
-  semaphore_init(&uart_data_ready, 1, 0);
 
   return ret;
 }
@@ -163,8 +163,26 @@ void uart_tx(uint8_t byte)
 
 void uart_send_byte(uint8_t byte)
 {
-  uart_tx(byte);
-  semaphore_give(&uart_data_ready);
+  if (uart_task_started) {
+    uint32_t cpsr = enter_critical();
+    uart_tx(byte);
+    exit_critical(cpsr);
+  }
+  else {
+    uart_tx(byte);
+  }
+
+  if (uart_task_started) {
+    semaphore_give(&uart_data_ready);
+  }
+}
+
+static void uart_print_no_signal(const char *str)
+{
+  uint32_t cpsr;
+  cpsr = enter_critical();
+  while (*str) { uart_tx((uint8_t)*str++);}
+  exit_critical(cpsr);
 }
 
 void uart_print(const char *str)
@@ -180,7 +198,9 @@ void uart_print(const char *str)
   if (uart_task_started) {
     exit_critical(cpsr);
   }
-  semaphore_give(&uart_data_ready);
+  if (uart_task_started) {
+    semaphore_give(&uart_data_ready);
+  }
 }
 
 static void print_uint(uint32_t n, uint32_t base, const char *digits, int width, char pad)
@@ -223,7 +243,7 @@ void uart_printf(const char *fmt, ...)
     switch (*fmt) {
     case 'c': uart_tx((uint8_t)va_arg(args, int));break;
 
-    case 's': { const char *s = va_arg(args, const char *);uart_print(s ? s : "(null)");break; }
+    case 's': { const char *s = va_arg(args, const char *);uart_print_no_signal(s ? s : "(null)");break; }
 
     case 'd': { int32_t n = va_arg(args, int32_t);
                 if (n < 0) {
@@ -251,7 +271,9 @@ void uart_printf(const char *fmt, ...)
     exit_critical(cpsr);
   }
 
-  semaphore_give(&uart_data_ready);
+  if (uart_task_started) {
+    semaphore_give(&uart_data_ready);
+  }
 }
 
 // ── Minimal mode: blocking TX, no task, no ring buffer ────────────────────────
