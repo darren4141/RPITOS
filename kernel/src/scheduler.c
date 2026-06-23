@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #include "dfu_trigger.h"
+#include "interrupts.h"
 #include "uart.h"
 
 static List ready_list[NUM_TASK_PRIORITIES];
@@ -162,7 +163,9 @@ void schedulerSwitchContext(void)
   if ((p_task_control_block != NULL) && (p_task_control_block->currentState == TASK_STATE_RUNNING)) {
     p_task_control_block->currentState = TASK_STATE_READY;
     List *list = &ready_list[p_task_control_block->priority];
-    list->index = (list->index->next != NULL) ? list->index->next : list->head;
+    if (list->index != NULL) {
+      list->index = (list->index->next != NULL) ? list->index->next : list->head;
+    }
   }
 
   // Pick the highest-priority non-empty list and run its index task
@@ -276,9 +279,11 @@ static void block_until(uint64_t wakeup_time)
 {
   volatile TaskControlBlock *my_tcb = p_task_control_block;
 
+  uint32_t cpsr = enter_critical();
   removeFromReadyList(&p_task_control_block);
   scheduler_add_to_blocked_list(p_task_control_block, wakeup_time);
   p_task_control_block->currentState = TASK_STATE_BLOCKED;
+  exit_critical(cpsr);
 
   while (my_tcb->currentState == TASK_STATE_BLOCKED) {}
 }
@@ -363,5 +368,9 @@ void __attribute__((noinline)) timer_tick_handler(void)
     }
 
     addToReadyList(&tcb);
+  }
+
+  if ((*s_tick_count) % 5000 == 0) {
+    uart_print("heartbeat\r\n");
   }
 }

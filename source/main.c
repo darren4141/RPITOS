@@ -74,10 +74,11 @@ void task_4_func(void *params)
 {
   uart_print("Task 4 starting.........\r\n");
   uint32_t recv_count = 0;
+  uint32_t msg;
+
   while (1) {
     task_delay_ms(1000);
     uart_print("Task 4 | draining queue...\r\n");
-    uint32_t msg;
     while (queue_recv(&test_queue, &msg, 0) == E_OK) {
       recv_count++;
       uart_printf("Task 4 | recv [%u] msg = %u\r\n", recv_count, msg);
@@ -99,8 +100,9 @@ void task_2_func(void *params)
 void task_3_func(void *params)
 {
   uart_print("Task 3 starting.........\r\n");
+  StatusCode ret;
   while (1) {
-    StatusCode ret = semaphore_take(&shared_semaphore, 100);
+    ret = semaphore_take(&shared_semaphore, 100);
 
     if (ret == E_OK) {
       shared_counter_2++;

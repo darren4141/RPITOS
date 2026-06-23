@@ -62,7 +62,7 @@ typedef enum {
 
 #define UART0            ((PL011Regs_t *)UART0_BASE)
 
-#define UART_BUFFER_SIZE 1024
+#define UART_BUFFER_SIZE 2056
 
 StatusCode uart_init(UartBaudrate baudrate);
 void uart_deinit();
