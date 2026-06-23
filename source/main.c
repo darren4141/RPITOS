@@ -34,6 +34,8 @@ static TaskControlBlock *tcb_4 = NULL;
 static TaskControlBlock *tcb_5 = NULL;
 static TaskControlBlock *tcb_dfu_trigger = NULL;
 
+static StatusCode ret;
+
 // Watches UART RX for the host's raw DFU trigger key. On match, sets the
 // DFU flag and reboots into the bootloader — no ack from here, only the
 // bootloader acks once it's actually ready to receive.
@@ -142,12 +144,39 @@ void kmain(void)
   uart_print("Starting main...\r\n");
 
   uart_print("Creating tasks...\r\n");
-  task_create(task_1_func, 512, TASK_PRIORITY_5, NULL, &tcb_1);
-  task_create(task_2_func, 512, TASK_PRIORITY_3, NULL, &tcb_2);
-  task_create(task_3_func, 512, TASK_PRIORITY_4, NULL, &tcb_3);
-  task_create(task_4_func, 512, TASK_PRIORITY_5, NULL, &tcb_4);
-  task_create(task_5_func, 512, TASK_PRIORITY_1, NULL, &tcb_5);
-  task_create(dfu_trigger_task, 512, TASK_PRIORITY_5, NULL, &tcb_dfu_trigger);
+
+
+  ret = task_create(task_1_func, 2048, TASK_PRIORITY_5, NULL, &tcb_1);
+  if (ret != E_OK) {
+    uart_printf("Create task 1 failed with exit code %d\r\n", ret);
+  }
+
+  ret = task_create(task_4_func, 2048, TASK_PRIORITY_5, NULL, &tcb_4);
+  if (ret != E_OK) {
+    uart_printf("Create task 4 failed with exit code %d\r\n", ret);
+  }
+
+
+  ret = task_create(task_2_func, 2048, TASK_PRIORITY_3, NULL, &tcb_2);
+  if (ret != E_OK) {
+    uart_printf("Create task 2 failed with exit code %d\r\n", ret);
+  }
+
+  ret = task_create(task_3_func, 2048, TASK_PRIORITY_4, NULL, &tcb_3);
+  if (ret != E_OK) {
+    uart_printf("Create task 3 failed with exit code %d\r\n", ret);
+  }
+
+
+  ret = task_create(task_5_func, 2048, TASK_PRIORITY_1, NULL, &tcb_5);
+  if (ret != E_OK) {
+    uart_printf("Create task 5 failed with exit code %d\r\n", ret);
+  }
+
+  ret = task_create(dfu_trigger_task, 1024, TASK_PRIORITY_5, NULL, &tcb_dfu_trigger);
+  if (ret != E_OK) {
+    uart_printf("Create dfu task failed with exit code %d\r\n", ret);
+  }
 
   uart_print("Initializing GIC...\r\n");
   gic_init();

@@ -50,6 +50,11 @@ StatusCode scheduler_init(volatile uint32_t *p_clk_freq, uint32_t new_hz, volati
   blocked_task_list.list_end = NULL;
   blocked_task_list.num_items = 0;
 
+  // Fill idle stack with watermark so the overflow check works for the idle task too
+  for (int i = 0; i < IDLE_STACK_DEPTH; i++) {
+    idle_stack[i] = TASK_WATERMARK;
+  }
+
   // Initialize idle task stack — mirrors initializeTaskStack() in task.c
   StackType_t *top = &idle_stack[IDLE_STACK_DEPTH - 1];
   *top-- = 0x00000013U;                     // SPSR: SVC mode, IRQs enabled
@@ -158,6 +163,15 @@ StatusCode removeFromReadyList(TaskControlBlock **tcb)
 // Scheduler performs a context switch, round-robin, highest priority takes precedence
 void schedulerSwitchContext(void)
 {
+  // Stack watermark check: the lowest word of every task stack is initialized to
+  // TASK_WATERMARK and never used for real data. If it has been overwritten the
+  // stack has overflowed. Hang here so JTAG can identify the task (taskId, p_Stack).
+  if ((p_task_control_block != NULL) && (p_task_control_block->p_Stack != NULL)
+      && (p_task_control_block->p_Stack[0] != TASK_WATERMARK)) {
+    for ( ; ; ) {
+    }
+  }
+
   // If the current task used its quantum (not blocked), mark READY and advance
   // the round-robin index so the next task at the same priority runs next tick
   if ((p_task_control_block != NULL) && (p_task_control_block->currentState == TASK_STATE_RUNNING)) {

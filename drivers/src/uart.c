@@ -137,7 +137,7 @@ StatusCode uart_init(UartBaudrate baudrate)
 StatusCode uart_task_start(void)
 {
   semaphore_init(&uart_data_ready, 1, 0);
-  StatusCode ret = task_create(uart_tx_task, 512, TASK_PRIORITY_5, NULL, &uart_tcb);
+  StatusCode ret = task_create(uart_tx_task, 2048, TASK_PRIORITY_5, NULL, &uart_tcb);
   if (ret == E_OK) {
     uart_task_started = true;
   }
@@ -152,7 +152,7 @@ static void uart_tx(uint8_t byte)
   }
   uint16_t next = (p_uart_buf_right + 1) % UART_BUFFER_SIZE;
   if (next == p_uart_buf_left) {
-    return;  // buffer full, drop byte
+    return;   // buffer full, drop byte
   }
   uart_buf[next] = byte;
   p_uart_buf_right = next;
@@ -165,7 +165,8 @@ void uart_send_byte(uint8_t byte)
     uart_tx(byte);
     exit_critical(cpsr);
     semaphore_give(&uart_data_ready);
-  } else {
+  }
+  else {
     uart_tx_raw(byte);
   }
 }
@@ -179,7 +180,8 @@ void uart_print(const char *str)
     }
     exit_critical(cpsr);
     semaphore_give(&uart_data_ready);
-  } else {
+  }
+  else {
     while (*str) {
       uart_tx_raw((uint8_t)*str++);
     }
@@ -216,12 +218,15 @@ static int format_uint(char *out, uint32_t n, uint32_t base, const char *digits,
   int i = 0;
   if (n == 0) {
     tmp[i++] = '0';
-  } else {
-    while (n > 0) { tmp[i++] = digits[n % base]; n /= base; }
+  }
+  else {
+    while (n > 0) { tmp[i++] = digits[n % base];n /= base; }
   }
   int len = 0;
-  for (int p = i; p < width; p++) out[len++] = pad;
-  while (i > 0) out[len++] = tmp[--i];
+  for (int p = i; p < width; p++) {
+    out[len++] = pad;
+  }
+  while (i > 0) {out[len++] = tmp[--i];}
   return len;
 }
 
@@ -235,50 +240,76 @@ void uart_printf(const char *fmt, ...)
 
   while (*fmt) {
     if (*fmt != '%') {
-      if (pos < (int)sizeof(local) - 1) local[pos++] = *fmt;
+      if (pos < (int)sizeof(local) - 1) {
+        local[pos++] = *fmt;
+      }
       fmt++;
       continue;
     }
     fmt++;
     char pad = ' ';
-    if (*fmt == '0') { pad = '0'; fmt++; }
+    if (*fmt == '0') {
+      pad = '0';fmt++;
+    }
     int width = 0;
     while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt++ - '0'); }
     switch (*fmt) {
     case 'c':
-      if (pos < (int)sizeof(local) - 1) local[pos++] = (char)va_arg(args, int);
+      if (pos < (int)sizeof(local) - 1) {
+        local[pos++] = (char)va_arg(args, int);
+      }
       break;
+
     case 's': {
       const char *s = va_arg(args, const char *);
-      if (!s) s = "(null)";
-      while (*s && pos < (int)sizeof(local) - 1) local[pos++] = *s++;
+      if (!s) {
+        s = "(null)";
+      }
+      while (*s && pos < (int)sizeof(local) - 1) {local[pos++] = *s++;}
       break;
     }
+
     case 'd': {
       int32_t n = va_arg(args, int32_t);
       if (pos + 12 < (int)sizeof(local)) {
-        if (n < 0) { local[pos++] = '-'; pos += format_uint(local + pos, (uint32_t)-n, 10, "0123456789", width > 0 ? width - 1 : 0, pad); }
-        else { pos += format_uint(local + pos, (uint32_t)n, 10, "0123456789", width, pad); }
+        if (n < 0) {
+          local[pos++] = '-';pos += format_uint(local + pos, (uint32_t)-n, 10, "0123456789", (width > 0) ? width - 1 : 0, pad);
+        }
+        else {
+          pos += format_uint(local + pos, (uint32_t)n, 10, "0123456789", width, pad);
+        }
       }
       break;
     }
+
     case 'u':
-      if (pos + 12 < (int)sizeof(local))
+      if (pos + 12 < (int)sizeof(local)) {
         pos += format_uint(local + pos, va_arg(args, uint32_t), 10, "0123456789", width, pad);
+      }
       break;
+
     case 'x':
-      if (pos + 12 < (int)sizeof(local))
+      if (pos + 12 < (int)sizeof(local)) {
         pos += format_uint(local + pos, va_arg(args, uint32_t), 16, "0123456789abcdef", width, pad);
+      }
       break;
+
     case 'X':
-      if (pos + 12 < (int)sizeof(local))
+      if (pos + 12 < (int)sizeof(local)) {
         pos += format_uint(local + pos, va_arg(args, uint32_t), 16, "0123456789ABCDEF", width, pad);
+      }
       break;
+
     case '%':
-      if (pos < (int)sizeof(local) - 1) local[pos++] = '%';
+      if (pos < (int)sizeof(local) - 1) {
+        local[pos++] = '%';
+      }
       break;
+
     default:
-      if (pos + 1 < (int)sizeof(local) - 1) { local[pos++] = '%'; local[pos++] = *fmt; }
+      if (pos + 1 < (int)sizeof(local) - 1) {
+        local[pos++] = '%';local[pos++] = *fmt;
+      }
       break;
     }
     fmt++;

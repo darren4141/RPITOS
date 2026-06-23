@@ -5,6 +5,10 @@
 
 static uint16_t taskCounter = 0;
 
+// TCBs live in a dedicated static pool, never adjacent to any task stack.
+// This means no amount of stack overflow can corrupt a TCB.
+static TaskControlBlock tcb_pool[MAX_NUM_TASKS];
+
 static StackType_t *initializeTaskStack(StackType_t *topOfStack, TaskFunction_t taskFunction, void *taskParams)
 {
   // SPSR — SVC mode, interrupts enabled, Thumb or ARM
@@ -44,11 +48,7 @@ StatusCode task_create(TaskFunction_t taskFunction, uint16_t stack_depth, TaskPr
     priority = NUM_TASK_PRIORITIES - 1;
   }
 
-  *p_task_control_block = heap_malloc(sizeof(TaskControlBlock));
-  if (*p_task_control_block == NULL) {
-    uart_print("Could not create task, out of stack space!");
-    return E_OUT_OF_MEM;
-  }
+  *p_task_control_block = &tcb_pool[taskCounter];
 
   (*p_task_control_block)->p_Stack = heap_malloc(sizeof(StackType_t) * stack_depth);
   if ((*p_task_control_block)->p_Stack == NULL) {
