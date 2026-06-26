@@ -1,4 +1,4 @@
-#include "dfu.h"
+#include "dfu_receive.h"
 
 #include <stdbool.h>
 
@@ -119,7 +119,7 @@ StatusCode dfu_receive()
   while (1) {
     uint8_t byte = uart_rx();
     if (dfu_trigger_feed(byte)) {
-      uart_tx(DFU_ACK);
+      uart_tx_raw(DFU_ACK);
       dfu_trigger_reset();
       break;
     }
@@ -147,7 +147,7 @@ StatusCode dfu_receive()
     case CMD_START:
       if (!started) {
         if (packet.LEN != 8U) {
-          uart_tx(DFU_NACK);
+          uart_tx_raw(DFU_NACK);
           state = DFU_STATE_ABORT;
           break;
         }
@@ -165,10 +165,10 @@ StatusCode dfu_receive()
         sectors_written = 1;
 
         started = true;
-        uart_tx(DFU_ACK);
+        uart_tx_raw(DFU_ACK);
       }
       else {
-        uart_tx(DFU_NACK);
+        uart_tx_raw(DFU_NACK);
         state = DFU_STATE_ABORT;
       }
       break;
@@ -176,7 +176,7 @@ StatusCode dfu_receive()
     case CMD_DATA:
       // our packet length must be a multiple of 32 bytes
       if (packet.LEN % 4 != 0) {
-        uart_tx(DFU_NACK);
+        uart_tx_raw(DFU_NACK);
         state = DFU_STATE_ABORT;
         break;
       }
@@ -240,13 +240,13 @@ StatusCode dfu_receive()
           crc32_update(&crc_ctx, packet.DATA, to_hash);
           bytes_hashed += to_hash;
         }
-        uart_tx(DFU_ACK);
+        uart_tx_raw(DFU_ACK);
       }
 
       break;
 
     case CMD_ABORT:
-      uart_tx(DFU_NACK);
+      uart_tx_raw(DFU_NACK);
       state = DFU_STATE_ABORT;
       break;
 
@@ -254,7 +254,7 @@ StatusCode dfu_receive()
       uint32_t img_actual_crc = crc32_finish(&crc_ctx);
       uart_printf("DFU CRC | Expected: 0x%08X | Actual: 0x%08X\r\n", img_expected_crc, img_actual_crc);
       if (img_actual_crc != img_expected_crc) {
-        uart_tx(DFU_NACK);
+        uart_tx_raw(DFU_NACK);
         state = DFU_STATE_ABORT;
         break;
       }
@@ -269,7 +269,7 @@ StatusCode dfu_receive()
         // write it
         emmc_write_blocks(EMMC_SECTOR_APP + sectors_written, current_sector, 1U);
       }
-      uart_tx(DFU_ACK);
+      uart_tx_raw(DFU_ACK);
       state = DFU_STATE_DONE;
       break;
     }

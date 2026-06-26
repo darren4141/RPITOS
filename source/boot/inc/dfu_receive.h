@@ -1,5 +1,5 @@
-#ifndef DFU_H
-#define DFU_H
+#ifndef DFU_RECEIVE_H
+#define DFU_RECEIVE_H
 
 #include <stdint.h>
 
