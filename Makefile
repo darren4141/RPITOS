@@ -13,8 +13,10 @@
 ARMGNU ?= arm-none-eabi
 
 CFLAGS_BASE := -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall -g -pipe \
-               -Isource/drivers/inc -Isource/kernel/inc -Isource/boot/inc \
-               -Isource/libraries/inc
+               $(patsubst %,-I%,$(wildcard source/drivers/*)) \
+               $(patsubst %,-I%,$(wildcard source/kernel/*)) \
+               $(patsubst %,-I%,$(wildcard source/boot/*)) \
+               $(patsubst %,-I%,$(wildcard source/libraries/*))
 
 ifdef SAMPLE
 # ─────────────────────────────────────────────────────────────────────────────
@@ -27,10 +29,10 @@ SAMPLE_OUT      := build/$(SAMPLE)
 SAMPLE_OBJ      := build/$(SAMPLE)/o
 
 # Per-sample declarations — expected variables:
-#   SAMPLE_DRIVERS         — source/drivers/src/<name>.c to compile
-#   SAMPLE_KERNEL          — source/kernel/src/<name>.c to compile
-#   SAMPLE_BOOT_COMPONENTS — source/boot/src/<name>.c to compile
-#   SAMPLE_LIBS            — source/libraries/src/<name>.c to compile
+#   SAMPLE_DRIVERS         — component names under source/drivers/<name>/
+#   SAMPLE_KERNEL          — component names under source/kernel/<name>/
+#   SAMPLE_BOOT_COMPONENTS — component names under source/boot/<name>/
+#   SAMPLE_LIBS            — component names under source/libraries/<name>/
 #   SAMPLE_EXTRA_CFLAGS    — additional flags (optional, defaults to empty)
 SAMPLE_EXTRA_CFLAGS :=
 include $(SAMPLE_DIR)/config.mk
@@ -42,25 +44,13 @@ LINKER  := $(SAMPLE_DIR)/$(SAMPLE_NAME).ld
 # startup.s: use per-sample override if present, otherwise fall back to shared
 SAMPLE_STARTUP := $(or $(wildcard $(SAMPLE_DIR)/startup.s),startup/startup.s)
 
-SAMPLE_C_SRCS := \
-  $(SAMPLE_DIR)/main.c \
-  $(patsubst %,source/drivers/src/%.c,  $(SAMPLE_DRIVERS)) \
-  $(patsubst %,source/kernel/src/%.c,   $(SAMPLE_KERNEL)) \
-  $(patsubst %,source/boot/src/%.c,     $(SAMPLE_BOOT_COMPONENTS)) \
-  $(patsubst %,source/libraries/src/%.c,$(SAMPLE_LIBS))
-
 SAMPLE_OBJECTS := \
   $(SAMPLE_OBJ)/startup.o \
-  $(patsubst $(SAMPLE_DIR)/%.c,          $(SAMPLE_OBJ)/%.o, \
-    $(filter $(SAMPLE_DIR)/%,            $(SAMPLE_C_SRCS))) \
-  $(patsubst source/drivers/src/%.c,    $(SAMPLE_OBJ)/%.o, \
-    $(filter source/drivers/src/%,      $(SAMPLE_C_SRCS))) \
-  $(patsubst source/kernel/src/%.c,     $(SAMPLE_OBJ)/%.o, \
-    $(filter source/kernel/src/%,       $(SAMPLE_C_SRCS))) \
-  $(patsubst source/boot/src/%.c,       $(SAMPLE_OBJ)/%.o, \
-    $(filter source/boot/src/%,         $(SAMPLE_C_SRCS))) \
-  $(patsubst source/libraries/src/%.c,  $(SAMPLE_OBJ)/%.o, \
-    $(filter source/libraries/src/%,    $(SAMPLE_C_SRCS)))
+  $(SAMPLE_OBJ)/main.o \
+  $(patsubst %,$(SAMPLE_OBJ)/%.o,$(SAMPLE_DRIVERS)) \
+  $(patsubst %,$(SAMPLE_OBJ)/%.o,$(SAMPLE_KERNEL)) \
+  $(patsubst %,$(SAMPLE_OBJ)/%.o,$(SAMPLE_BOOT_COMPONENTS)) \
+  $(patsubst %,$(SAMPLE_OBJ)/%.o,$(SAMPLE_LIBS))
 
 # ── Targets ──────────────────────────────────────────────────────────────────
 .PHONY: all
@@ -90,17 +80,17 @@ $(SAMPLE_OBJ)/startup.o: $(SAMPLE_STARTUP) | $(SAMPLE_OBJ)
 $(SAMPLE_OBJ)/%.o: $(SAMPLE_DIR)/%.c | $(SAMPLE_OBJ)
 	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
 
-$(SAMPLE_OBJ)/%.o: source/drivers/src/%.c | $(SAMPLE_OBJ)
-	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
+# Generate one explicit rule per component (pattern rules don't support % twice
+# in a single prerequisite path, e.g. source/drivers/%/%.c).
+define COMPILE_RULE
+$(SAMPLE_OBJ)/$(1).o: $(2)/$(1)/$(1).c | $(SAMPLE_OBJ)
+	$(ARMGNU)-gcc $(CFLAGS) -c $$< -o $$@
+endef
 
-$(SAMPLE_OBJ)/%.o: source/kernel/src/%.c | $(SAMPLE_OBJ)
-	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
-
-$(SAMPLE_OBJ)/%.o: source/boot/src/%.c | $(SAMPLE_OBJ)
-	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
-
-$(SAMPLE_OBJ)/%.o: source/libraries/src/%.c | $(SAMPLE_OBJ)
-	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
+$(foreach d,$(SAMPLE_DRIVERS),       $(eval $(call COMPILE_RULE,$d,source/drivers)))
+$(foreach d,$(SAMPLE_KERNEL),        $(eval $(call COMPILE_RULE,$d,source/kernel)))
+$(foreach d,$(SAMPLE_BOOT_COMPONENTS),$(eval $(call COMPILE_RULE,$d,source/boot)))
+$(foreach d,$(SAMPLE_LIBS),          $(eval $(call COMPILE_RULE,$d,source/libraries)))
 
 $(SAMPLE_OUT):
 	mkdir -p $@
