@@ -7,7 +7,7 @@
 #define TASK_WATERMARK 0x5A
 
 typedef enum {
-  TASK_PRIORITY_0 = 0,
+  TASK_PRIORITY_IDLE = 0,
   TASK_PRIORITY_1 = 1,
   TASK_PRIORITY_2 = 2,
   TASK_PRIORITY_3 = 3,
@@ -23,6 +23,11 @@ typedef enum {
   TASK_STATE_SUSPENDED,
   TASK_STATE_DELETED
 } TaskState;
+
+typedef enum {
+  WAKEUP_REASON_NONE = 0,
+  WAKEUP_REASON_RESOURCE_ACQUIRED,
+} TaskWakeupReason;
 
 // Forward declarations — all three structs reference each other via pointers
 typedef struct List List;
@@ -60,6 +65,8 @@ struct TaskControlBlock {
 
   ListItem state_list_item;
   ListItem event_list_item;
+
+  volatile TaskWakeupReason wakeup_reason;
 };
 
 #endif

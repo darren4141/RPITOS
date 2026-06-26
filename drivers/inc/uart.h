@@ -62,16 +62,17 @@ typedef enum {
 
 #define UART0            ((PL011Regs_t *)UART0_BASE)
 
-#define UART_BUFFER_SIZE 1024
+#define UART_BUFFER_SIZE 2056
 
 StatusCode uart_init(UartBaudrate baudrate);
 void uart_deinit();
 
+void uart_tx_raw(uint8_t byte);
+
 #ifndef UART_MINIMAL
 StatusCode uart_task_start(void);
+void uart_send_byte(uint8_t byte);
 #endif
-
-void uart_tx(uint8_t byte);
 uint8_t uart_rx();
 StatusCode uart_rx_nonblocking(uint8_t *out);
 StatusCode uart_rx_timed(uint8_t *out, uint32_t timeout_ms);

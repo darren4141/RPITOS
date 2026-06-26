@@ -34,6 +34,8 @@ static TaskControlBlock *tcb_4 = NULL;
 static TaskControlBlock *tcb_5 = NULL;
 static TaskControlBlock *tcb_dfu_trigger = NULL;
 
+static StatusCode ret;
+
 // Watches UART RX for the host's raw DFU trigger key. On match, sets the
 // DFU flag and reboots into the bootloader — no ack from here, only the
 // bootloader acks once it's actually ready to receive.
@@ -74,10 +76,11 @@ void task_4_func(void *params)
 {
   uart_print("Task 4 starting.........\r\n");
   uint32_t recv_count = 0;
+  uint32_t msg;
+
   while (1) {
     task_delay_ms(1000);
     uart_print("Task 4 | draining queue...\r\n");
-    uint32_t msg;
     while (queue_recv(&test_queue, &msg, 0) == E_OK) {
       recv_count++;
       uart_printf("Task 4 | recv [%u] msg = %u\r\n", recv_count, msg);
@@ -92,22 +95,23 @@ void task_2_func(void *params)
   while (1) {
     task_delay_ms(1000);
     semaphore_give(&shared_semaphore);
-    uart_print("Task 1 | giving semaphore\r\n");
+    uart_print("Task 2 | giving semaphore\r\n");
   }
 }
 
 void task_3_func(void *params)
 {
   uart_print("Task 3 starting.........\r\n");
+  StatusCode ret;
   while (1) {
-    StatusCode ret = semaphore_take(&shared_semaphore, 100);
+    ret = semaphore_take(&shared_semaphore, 100);
 
     if (ret == E_OK) {
       shared_counter_2++;
-      uart_printf("Task 4 | semaphore taken - %u\r\n", shared_counter_2);
+      uart_printf("Task 3 | semaphore taken - %u\r\n", shared_counter_2);
     }
     else {
-      uart_print("Task 4 | semaphore timed out\r\n");
+      uart_print("Task 3 | semaphore timed out\r\n");
     }
 
     task_delay_ms(100);
@@ -140,12 +144,39 @@ void kmain(void)
   uart_print("Starting main...\r\n");
 
   uart_print("Creating tasks...\r\n");
-  task_create(task_1_func, 512, TASK_PRIORITY_5, NULL, &tcb_1);
-  task_create(task_2_func, 512, TASK_PRIORITY_3, NULL, &tcb_2);
-  task_create(task_3_func, 512, TASK_PRIORITY_4, NULL, &tcb_3);
-  task_create(task_4_func, 512, TASK_PRIORITY_5, NULL, &tcb_4);
-  task_create(task_5_func, 512, TASK_PRIORITY_3, NULL, &tcb_5);
-  task_create(dfu_trigger_task, 512, TASK_PRIORITY_5, NULL, &tcb_dfu_trigger);
+
+
+  ret = task_create(task_1_func, 2048, TASK_PRIORITY_5, NULL, &tcb_1);
+  if (ret != E_OK) {
+    uart_printf("Create task 1 failed with exit code %d\r\n", ret);
+  }
+
+  ret = task_create(task_4_func, 2048, TASK_PRIORITY_5, NULL, &tcb_4);
+  if (ret != E_OK) {
+    uart_printf("Create task 4 failed with exit code %d\r\n", ret);
+  }
+
+
+  ret = task_create(task_2_func, 2048, TASK_PRIORITY_3, NULL, &tcb_2);
+  if (ret != E_OK) {
+    uart_printf("Create task 2 failed with exit code %d\r\n", ret);
+  }
+
+  ret = task_create(task_3_func, 2048, TASK_PRIORITY_4, NULL, &tcb_3);
+  if (ret != E_OK) {
+    uart_printf("Create task 3 failed with exit code %d\r\n", ret);
+  }
+
+
+  ret = task_create(task_5_func, 2048, TASK_PRIORITY_1, NULL, &tcb_5);
+  if (ret != E_OK) {
+    uart_printf("Create task 5 failed with exit code %d\r\n", ret);
+  }
+
+  ret = task_create(dfu_trigger_task, 1024, TASK_PRIORITY_5, NULL, &tcb_dfu_trigger);
+  if (ret != E_OK) {
+    uart_printf("Create dfu task failed with exit code %d\r\n", ret);
+  }
 
   uart_print("Initializing GIC...\r\n");
   gic_init();

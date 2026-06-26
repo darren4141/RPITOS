@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #include "dfu_trigger.h"
+#include "interrupts.h"
 #include "uart.h"
 
 static List ready_list[NUM_TASK_PRIORITIES];
@@ -14,6 +15,16 @@ TaskControlBlock *p_task_control_block = NULL;    // global — visible to assem
 static volatile uint32_t *s_clk_freq;
 static volatile uint64_t *s_tick_count;
 static uint32_t hz;
+
+#define IDLE_STACK_DEPTH 64
+static TaskControlBlock idle_tcb;
+static StackType_t idle_stack[IDLE_STACK_DEPTH];
+
+static void idle_task_func(void *params)
+{
+  (void)params;
+  while (1) {}
+}
 
 // Initialize scheduler, link clk_freq, tick_count, and initialize ready lists
 StatusCode scheduler_init(volatile uint32_t *p_clk_freq, uint32_t new_hz, volatile uint64_t *p_tick_count)
@@ -38,6 +49,35 @@ StatusCode scheduler_init(volatile uint32_t *p_clk_freq, uint32_t new_hz, volati
   blocked_task_list.index = NULL;
   blocked_task_list.list_end = NULL;
   blocked_task_list.num_items = 0;
+
+  // Fill idle stack with watermark so the overflow check works for the idle task too
+  for (int i = 0; i < IDLE_STACK_DEPTH; i++) {
+    idle_stack[i] = TASK_WATERMARK;
+  }
+
+  // Initialize idle task stack — mirrors initializeTaskStack() in task.c
+  StackType_t *top = &idle_stack[IDLE_STACK_DEPTH - 1];
+  *top-- = 0x00000013U;                     // SPSR: SVC mode, IRQs enabled
+  *top-- = (StackType_t)idle_task_func;     // PC
+  for (int i = 12; i >= 1; i--) {
+    *top-- = 0U;                            // R12–R1
+  }
+  *top = 0U;                                // R0 (params)
+
+  idle_tcb.p_Stack = idle_stack;
+  idle_tcb.p_EndOfStack = &idle_stack[IDLE_STACK_DEPTH - 1];
+  idle_tcb.p_TopOfStack = top;
+  idle_tcb.stackDepth = IDLE_STACK_DEPTH;
+  idle_tcb.taskId = 0xFFFFU;
+  idle_tcb.priority = TASK_PRIORITY_IDLE;
+  idle_tcb.currentState = TASK_STATE_READY;
+  idle_tcb.wakeup_time = 0U;
+  idle_tcb.wakeup_reason = WAKEUP_REASON_NONE;
+  idle_tcb.state_list_item = (ListItem) { NULL, NULL, &idle_tcb, NULL };
+  idle_tcb.event_list_item = (ListItem) { NULL, NULL, &idle_tcb, NULL };
+
+  TaskControlBlock *p_idle = &idle_tcb;
+  addToReadyList(&p_idle);
 
   return E_OK;
 }
@@ -124,12 +164,23 @@ StatusCode removeFromReadyList(TaskControlBlock **tcb)
 // Scheduler performs a context switch, round-robin, highest priority takes precedence
 void schedulerSwitchContext(void)
 {
+  // Stack watermark check: the lowest word of every task stack is initialized to
+  // TASK_WATERMARK and never used for real data. If it has been overwritten the
+  // stack has overflowed. Hang here so JTAG can identify the task (taskId, p_Stack).
+  if ((p_task_control_block != NULL) && (p_task_control_block->p_Stack != NULL)
+      && (p_task_control_block->p_Stack[0] != TASK_WATERMARK)) {
+    for ( ; ; ) {
+    }
+  }
+
   // If the current task used its quantum (not blocked), mark READY and advance
   // the round-robin index so the next task at the same priority runs next tick
   if ((p_task_control_block != NULL) && (p_task_control_block->currentState == TASK_STATE_RUNNING)) {
     p_task_control_block->currentState = TASK_STATE_READY;
     List *list = &ready_list[p_task_control_block->priority];
-    list->index = (list->index->next != NULL) ? list->index->next : list->head;
+    if (list->index != NULL) {
+      list->index = (list->index->next != NULL) ? list->index->next : list->head;
+    }
   }
 
   // Pick the highest-priority non-empty list and run its index task
@@ -243,9 +294,11 @@ static void block_until(uint64_t wakeup_time)
 {
   volatile TaskControlBlock *my_tcb = p_task_control_block;
 
+  uint32_t cpsr = enter_critical();
   removeFromReadyList(&p_task_control_block);
   scheduler_add_to_blocked_list(p_task_control_block, wakeup_time);
   p_task_control_block->currentState = TASK_STATE_BLOCKED;
+  exit_critical(cpsr);
 
   while (my_tcb->currentState == TASK_STATE_BLOCKED) {}
 }
@@ -330,5 +383,9 @@ void __attribute__((noinline)) timer_tick_handler(void)
     }
 
     addToReadyList(&tcb);
+  }
+
+  if ((*s_tick_count) % 5000 == 0) {
+    uart_print("heartbeat\r\n");
   }
 }

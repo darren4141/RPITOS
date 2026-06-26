@@ -6,6 +6,8 @@
 #include <stdint.h>
 
 #ifndef UART_MINIMAL
+#include "interrupts.h"
+#include "semaphore.h"
 #include "task.h"
 #include "task_types.h"
 #endif
@@ -50,7 +52,7 @@ static StatusCode uart_hw_init(UartBaudrate baudrate)
   return E_OK;
 }
 
-static void uart_tx_raw(uint8_t byte)
+void uart_tx_raw(uint8_t byte)
 {
   while (UART0->FR & FR_TXFF) {}
   UART0->DR = byte;
@@ -74,12 +76,12 @@ StatusCode uart_rx_nonblocking(uint8_t *out)
 StatusCode uart_rx_timed(uint8_t *out, uint32_t timeout_ms)
 {
   uint32_t frq, lo, hi;
-  asm volatile ("mrc  p15, 0, %0, c14, c0, 0" : "=r"(frq));
-  asm volatile ("mrrc p15, 0, %0, %1,  c14"   : "=r"(lo), "=r"(hi));
+  asm volatile ("mrc  p15, 0, %0, c14, c0, 0" : "=r" (frq));
+  asm volatile ("mrrc p15, 0, %0, %1,  c14"   : "=r" (lo), "=r" (hi));
   uint64_t start = ((uint64_t)hi << 32) | lo;
   uint64_t ticks = (uint64_t)frq * timeout_ms / 1000ULL;
   while (UART0->FR & FR_RXFE) {
-    asm volatile ("mrrc p15, 0, %0, %1, c14" : "=r"(lo), "=r"(hi));
+    asm volatile ("mrrc p15, 0, %0, %1, c14" : "=r" (lo), "=r" (hi));
     if ((((uint64_t)hi << 32) | lo) - start >= ticks) {
       return E_TIMED_OUT;
     }
@@ -94,10 +96,10 @@ void uart_deinit()
   // corrupts the current character on the wire.
   while (UART0->FR & FR_BUSY) {}
 
-  UART0->CR &= ~(CR_UARTEN | CR_TXE | CR_RXE);   // disable UART, TX, RX
-  UART0->LCRH &= ~LCRH_FEN;                      // flush + disable FIFO
-  UART0->IMSC = 0;                               // mask all interrupts
-  UART0->ICR = ICR_ALL;                          // clear any pending
+  UART0->CR &= ~(CR_UARTEN | CR_TXE | CR_RXE);
+  UART0->LCRH &= ~LCRH_FEN;
+  UART0->IMSC = 0;
+  UART0->ICR = ICR_ALL;
 
   gpio_set_function(14, GPIO_FUNC_INPUT);
   gpio_set_function(15, GPIO_FUNC_INPUT);
@@ -106,6 +108,7 @@ void uart_deinit()
 // ── Full mode: ring-buffer TX + scheduler task ────────────────────────────────
 #ifndef UART_MINIMAL
 
+static Semaphore uart_data_ready;
 static volatile uint8_t uart_buf[UART_BUFFER_SIZE];
 static volatile uint16_t p_uart_buf_left = 0;
 static volatile uint16_t p_uart_buf_right = 0;
@@ -115,12 +118,11 @@ static bool uart_task_started = false;
 
 void uart_tx_task(void *params)
 {
+  (void)params;
   while (1) {
-    if (p_uart_buf_right != p_uart_buf_left) {
-      p_uart_buf_left++;
-      if (p_uart_buf_left >= UART_BUFFER_SIZE) {
-        p_uart_buf_left = 0;
-      }
+    semaphore_take(&uart_data_ready, SEMAPHORE_TAKE_BLOCKING);
+    while (p_uart_buf_right != p_uart_buf_left) {
+      p_uart_buf_left = (p_uart_buf_left + 1) % UART_BUFFER_SIZE;
       uart_tx_raw(uart_buf[p_uart_buf_left]);
     }
   }
@@ -134,109 +136,59 @@ StatusCode uart_init(UartBaudrate baudrate)
 
 StatusCode uart_task_start(void)
 {
-  StatusCode ret = task_create(uart_tx_task, 512, TASK_PRIORITY_2, NULL, &uart_tcb);
+  semaphore_init(&uart_data_ready, 1, 0);
+  StatusCode ret = task_create(uart_tx_task, 2048, TASK_PRIORITY_5, NULL, &uart_tcb);
   if (ret == E_OK) {
     uart_task_started = true;
   }
   return ret;
 }
 
-void uart_tx(uint8_t byte)
+static void uart_tx(uint8_t byte)
 {
   if (!uart_task_started) {
     uart_tx_raw(byte);
     return;
   }
-  uint16_t next = p_uart_buf_right + 1;
-  if (next >= UART_BUFFER_SIZE) {
-    next = 0;
+  uint16_t next = (p_uart_buf_right + 1) % UART_BUFFER_SIZE;
+  if (next == p_uart_buf_left) {
+    return;   // buffer full, drop byte
   }
   uart_buf[next] = byte;
   p_uart_buf_right = next;
 }
 
+void uart_send_byte(uint8_t byte)
+{
+  if (uart_task_started) {
+    uint32_t cpsr = enter_critical();
+    uart_tx(byte);
+    exit_critical(cpsr);
+    semaphore_give(&uart_data_ready);
+  }
+  else {
+    uart_tx_raw(byte);
+  }
+}
+
 void uart_print(const char *str)
 {
   if (uart_task_started) {
-    __asm__ volatile ("cpsid i" ::: "memory");
-  }
-  while (*str) {
-    uart_tx((uint8_t)*str++);
-  }
-  if (uart_task_started) {
-    __asm__ volatile ("cpsie i" ::: "memory");
-  }
-}
-
-static void print_uint(uint32_t n, uint32_t base, const char *digits, int width, char pad)
-{
-  char buf[10];
-  int i = 0;
-  if (n == 0) {
-    buf[i++] = '0';
+    uint32_t cpsr = enter_critical();
+    while (*str) {
+      uart_tx((uint8_t)*str++);
+    }
+    exit_critical(cpsr);
+    semaphore_give(&uart_data_ready);
   }
   else {
-    while (n > 0) { buf[i++] = digits[n % base];n /= base; }
-  }
-  for (int p = i; p < width; p++) {
-    uart_tx((uint8_t)pad);
-  }
-  while (i > 0) { uart_tx((uint8_t)buf[--i]); }
-}
-
-void uart_printf(const char *fmt, ...)
-{
-  if (uart_task_started) {
-    __asm__ volatile ("cpsid i" ::: "memory");
-  }
-  va_list args;
-  va_start(args, fmt);
-
-  while (*fmt) {
-    if (*fmt != '%') {
-      uart_tx((uint8_t)*fmt++);continue;
+    while (*str) {
+      uart_tx_raw((uint8_t)*str++);
     }
-    fmt++;
-    char pad = ' ';
-    if (*fmt == '0') {
-      pad = '0';fmt++;
-    }
-    int width = 0;
-    while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt++ - '0'); }
-    switch (*fmt) {
-    case 'c': uart_tx((uint8_t)va_arg(args, int));break;
-
-    case 's': { const char *s = va_arg(args, const char *);uart_print(s ? s : "(null)");break; }
-
-    case 'd': { int32_t n = va_arg(args, int32_t);
-                if (n < 0) {
-                  uart_tx('-');print_uint((uint32_t)-n, 10, "0123456789", width > 0 ? width - 1 : 0, pad);
-                }
-                else {
-                  print_uint((uint32_t)n, 10, "0123456789", width, pad);
-                } break; }
-
-    case 'u': print_uint(va_arg(args, uint32_t), 10, "0123456789", width, pad);break;
-
-    case 'x': print_uint(va_arg(args, uint32_t), 16, "0123456789abcdef", width, pad);break;
-
-    case 'X': print_uint(va_arg(args, uint32_t), 16, "0123456789ABCDEF", width, pad);break;
-
-    case '%': uart_tx('%');break;
-
-    default:  uart_tx('%');uart_tx((uint8_t)*fmt);break;
-    }
-    fmt++;
-  }
-
-  va_end(args);
-  if (uart_task_started) {
-    __asm__ volatile ("cpsie i" ::: "memory");
   }
 }
 
 // ── Minimal mode: blocking TX, no task, no ring buffer ────────────────────────
-// Minimal mode is used by the bootloader since it has no RTOS and cannot support a UART task & buffer
 #else
 
 StatusCode uart_init(UartBaudrate baudrate)
@@ -244,7 +196,7 @@ StatusCode uart_init(UartBaudrate baudrate)
   return uart_hw_init(baudrate);
 }
 
-void uart_tx(uint8_t byte)
+static void uart_tx(uint8_t byte)
 {
   uart_tx_raw(byte);
 }
@@ -256,30 +208,43 @@ void uart_print(const char *str)
   }
 }
 
-static void print_uint(uint32_t n, uint32_t base, const char *digits, int width, char pad)
+#endif
+
+// ── Shared: printf (both modes write to a buffer, then flush via uart_print) ──
+
+static int format_uint(char *out, uint32_t n, uint32_t base, const char *digits, int width, char pad)
 {
-  char buf[10];
+  char tmp[10];
   int i = 0;
   if (n == 0) {
-    buf[i++] = '0';
+    tmp[i++] = '0';
   }
   else {
-    while (n > 0) { buf[i++] = digits[n % base];n /= base; }
+    while (n > 0) { tmp[i++] = digits[n % base];n /= base; }
   }
+  int len = 0;
   for (int p = i; p < width; p++) {
-    uart_tx_raw((uint8_t)pad);
+    out[len++] = pad;
   }
-  while (i > 0) { uart_tx_raw((uint8_t)buf[--i]); }
+  while (i > 0) {out[len++] = tmp[--i];}
+  return len;
 }
 
 void uart_printf(const char *fmt, ...)
 {
+  char local[256];
+  int pos = 0;
+
   va_list args;
   va_start(args, fmt);
 
   while (*fmt) {
     if (*fmt != '%') {
-      uart_tx_raw((uint8_t)*fmt++);continue;
+      if (pos < (int)sizeof(local) - 1) {
+        local[pos++] = *fmt;
+      }
+      fmt++;
+      continue;
     }
     fmt++;
     char pad = ' ';
@@ -289,32 +254,68 @@ void uart_printf(const char *fmt, ...)
     int width = 0;
     while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt++ - '0'); }
     switch (*fmt) {
-    case 'c': uart_tx_raw((uint8_t)va_arg(args, int));break;
+    case 'c':
+      if (pos < (int)sizeof(local) - 1) {
+        local[pos++] = (char)va_arg(args, int);
+      }
+      break;
 
-    case 's': { const char *s = va_arg(args, const char *);uart_print(s ? s : "(null)");break; }
+    case 's': {
+      const char *s = va_arg(args, const char *);
+      if (!s) {
+        s = "(null)";
+      }
+      while (*s && pos < (int)sizeof(local) - 1) {local[pos++] = *s++;}
+      break;
+    }
 
-    case 'd': { int32_t n = va_arg(args, int32_t);
-                if (n < 0) {
-                  uart_tx_raw('-');print_uint((uint32_t)-n, 10, "0123456789", width > 0 ? width - 1 : 0, pad);
-                }
-                else {
-                  print_uint((uint32_t)n, 10, "0123456789", width, pad);
-                } break; }
+    case 'd': {
+      int32_t n = va_arg(args, int32_t);
+      if (pos + 12 < (int)sizeof(local)) {
+        if (n < 0) {
+          local[pos++] = '-';pos += format_uint(local + pos, (uint32_t)-n, 10, "0123456789", (width > 0) ? width - 1 : 0, pad);
+        }
+        else {
+          pos += format_uint(local + pos, (uint32_t)n, 10, "0123456789", width, pad);
+        }
+      }
+      break;
+    }
 
-    case 'u': print_uint(va_arg(args, uint32_t), 10, "0123456789", width, pad);break;
+    case 'u':
+      if (pos + 12 < (int)sizeof(local)) {
+        pos += format_uint(local + pos, va_arg(args, uint32_t), 10, "0123456789", width, pad);
+      }
+      break;
 
-    case 'x': print_uint(va_arg(args, uint32_t), 16, "0123456789abcdef", width, pad);break;
+    case 'x':
+      if (pos + 12 < (int)sizeof(local)) {
+        pos += format_uint(local + pos, va_arg(args, uint32_t), 16, "0123456789abcdef", width, pad);
+      }
+      break;
 
-    case 'X': print_uint(va_arg(args, uint32_t), 16, "0123456789ABCDEF", width, pad);break;
+    case 'X':
+      if (pos + 12 < (int)sizeof(local)) {
+        pos += format_uint(local + pos, va_arg(args, uint32_t), 16, "0123456789ABCDEF", width, pad);
+      }
+      break;
 
-    case '%': uart_tx_raw('%');break;
+    case '%':
+      if (pos < (int)sizeof(local) - 1) {
+        local[pos++] = '%';
+      }
+      break;
 
-    default:  uart_tx_raw('%');uart_tx_raw((uint8_t)*fmt);break;
+    default:
+      if (pos + 1 < (int)sizeof(local) - 1) {
+        local[pos++] = '%';local[pos++] = *fmt;
+      }
+      break;
     }
     fmt++;
   }
 
   va_end(args);
+  local[pos] = '\0';
+  uart_print(local);
 }
-
-#endif
