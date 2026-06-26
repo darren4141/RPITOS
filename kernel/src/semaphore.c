@@ -4,6 +4,7 @@
 
 #include "interrupts.h"
 #include "scheduler.h"
+#include "uart.h"
 
 static void semaphore_add_to_blocked_list(Semaphore *smph, TaskControlBlock *tcb)
 {
@@ -69,6 +70,14 @@ StatusCode semaphore_take(Semaphore *smph, int64_t timeout_ms)
     exit_critical(cpsr);
 
     while (cur_tcb->currentState == TASK_STATE_BLOCKED) {}
+
+    uint32_t cpsr2 = enter_critical();
+    if (cur_tcb->wakeup_reason == WAKEUP_REASON_RESOURCE_ACQUIRED) {
+      cur_tcb->wakeup_reason = WAKEUP_REASON_NONE;
+      exit_critical(cpsr2);
+      return E_OK;
+    }
+    exit_critical(cpsr2);
   }
 }
 
@@ -76,32 +85,32 @@ StatusCode semaphore_give(Semaphore *smph)
 {
   uint32_t cpsr = enter_critical();
 
-  if (smph->count < smph->max_count) {
-    smph->count++;
-  }
-  else {
-    exit_critical(cpsr);
-    return E_RESOURCE_EXHAUSTED;
-  }
-
   if (smph->semaphore_blocked_list.num_items > 0) {
-    if (smph->semaphore_blocked_list.num_items == 1) {
-      smph->semaphore_blocked_list.list_end = NULL;
-    }
-
     TaskControlBlock *p_next_tcb = smph->semaphore_blocked_list.head->owner;
     smph->semaphore_blocked_list.head = smph->semaphore_blocked_list.head->next;
     if (smph->semaphore_blocked_list.head != NULL) {
       smph->semaphore_blocked_list.head->prev = NULL;
     }
+    else {
+      smph->semaphore_blocked_list.list_end = NULL;
+    }
     smph->semaphore_blocked_list.num_items--;
-
 
     scheduler_remove_from_blocked_list(p_next_tcb);
     p_next_tcb->event_list_item.next = NULL;
     p_next_tcb->event_list_item.prev = NULL;
     p_next_tcb->event_list_item.container = NULL;
+    p_next_tcb->wakeup_reason = WAKEUP_REASON_RESOURCE_ACQUIRED;
     addToReadyList(&p_next_tcb);
+  }
+  else {
+    if (smph->count < smph->max_count) {
+      smph->count++;
+    }
+    else {
+      exit_critical(cpsr);
+      return E_RESOURCE_EXHAUSTED;
+    }
   }
 
   exit_critical(cpsr);

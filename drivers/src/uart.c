@@ -52,7 +52,7 @@ static StatusCode uart_hw_init(UartBaudrate baudrate)
   return E_OK;
 }
 
-static void uart_tx_raw(uint8_t byte)
+void uart_tx_raw(uint8_t byte)
 {
   while (UART0->FR & FR_TXFF) {}
   UART0->DR = byte;

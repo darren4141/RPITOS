@@ -72,6 +72,7 @@ StatusCode scheduler_init(volatile uint32_t *p_clk_freq, uint32_t new_hz, volati
   idle_tcb.priority = TASK_PRIORITY_IDLE;
   idle_tcb.currentState = TASK_STATE_READY;
   idle_tcb.wakeup_time = 0U;
+  idle_tcb.wakeup_reason = WAKEUP_REASON_NONE;
   idle_tcb.state_list_item = (ListItem) { NULL, NULL, &idle_tcb, NULL };
   idle_tcb.event_list_item = (ListItem) { NULL, NULL, &idle_tcb, NULL };
 

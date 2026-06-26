@@ -69,6 +69,7 @@ StatusCode task_create(TaskFunction_t taskFunction, uint16_t stack_depth, TaskPr
 
   (*p_task_control_block)->currentState = TASK_STATE_READY;
   (*p_task_control_block)->wakeup_time = 0U;
+  (*p_task_control_block)->wakeup_reason = WAKEUP_REASON_NONE;
 
   // initialize stack
   (*p_task_control_block)->p_TopOfStack = initializeTaskStack((*p_task_control_block)->p_EndOfStack, taskFunction, taskParams);

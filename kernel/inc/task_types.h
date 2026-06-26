@@ -24,6 +24,11 @@ typedef enum {
   TASK_STATE_DELETED
 } TaskState;
 
+typedef enum {
+  WAKEUP_REASON_NONE = 0,
+  WAKEUP_REASON_RESOURCE_ACQUIRED,
+} TaskWakeupReason;
+
 // Forward declarations — all three structs reference each other via pointers
 typedef struct List List;
 typedef struct ListItem ListItem;
@@ -60,6 +65,8 @@ struct TaskControlBlock {
 
   ListItem state_list_item;
   ListItem event_list_item;
+
+  volatile TaskWakeupReason wakeup_reason;
 };
 
 #endif

@@ -67,6 +67,8 @@ typedef enum {
 StatusCode uart_init(UartBaudrate baudrate);
 void uart_deinit();
 
+void uart_tx_raw(uint8_t byte);
+
 #ifndef UART_MINIMAL
 StatusCode uart_task_start(void);
 void uart_send_byte(uint8_t byte);
