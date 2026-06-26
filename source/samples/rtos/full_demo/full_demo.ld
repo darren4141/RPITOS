@@ -40,7 +40,7 @@ SECTIONS {
 		_svc_stack_bottom = .;  . += 0x1000; _svc_stack_top = .;
 	}
 
-	/* Shared flags — must match boot.ld exactly */
+	/* Shared flags — must match bootloader.ld exactly */
 	.shared_flags 0x88000 (NOLOAD) : {
 		_shared_flags_start = .;
 		*(.shared_flags)

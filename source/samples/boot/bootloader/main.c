@@ -3,7 +3,7 @@
 
 #include "boot.h"
 #include "boot_flags.h"
-#include "dfu.h"
+#include "dfu_receive.h"
 #include "dfu_trigger.h"
 #include "emmc.h"
 #include "jtag.h"

@@ -1,162 +1,134 @@
 ###############################################################################
-#	Makefile — rpitos
-#	Bare-metal RTOS for Raspberry Pi CM4 (BCM2711, Cortex-A72, AArch32)
+# Makefile — rpitos
+# Bare-metal RTOS for Raspberry Pi CM4 (BCM2711, Cortex-A72, AArch32)
+#
+# Usage:
+#   make                        — build all samples listed in samples.json
+#   make SAMPLE=rtos/full_demo  — build one specific sample
+#   make SAMPLE=boot/bootloader — build the bootloader
+#   make clean                  — remove entire build/ tree
+#   make SAMPLE=rtos/full_demo qemu — run a sample in QEMU
 ###############################################################################
 
 ARMGNU ?= arm-none-eabi
 
-BUILD   = build/
-TARGET  = kernel7l.img
-ELF     = kernel7l.elf
-HEX     = kernel7l.hex
-LIST    = kernel.list
-MAP     = kernel.map
-LINKER  = source/kernel.ld
+CFLAGS_BASE := -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall -g -pipe \
+               -Isource/drivers/inc -Isource/kernel/inc -Isource/boot/inc \
+               -Isource/libraries/inc
 
-# GCC flags for bare-metal Cortex-A72 AArch32
-CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall -g \
-         -Idrivers/inc -Iinc -Ilibraries/inc -Ikernel/inc
+ifdef SAMPLE
+# ─────────────────────────────────────────────────────────────────────────────
+# Single-sample build:  make SAMPLE=<category>/<name>
+# ─────────────────────────────────────────────────────────────────────────────
 
-# Source directories
-ASM_SRCS := $(wildcard startup/*.s)
-C_SRCS   := $(wildcard source/*.c) $(wildcard drivers/src/*.c) $(wildcard libraries/src/*.c) $(wildcard kernel/src/*.c)
+SAMPLE_NAME     := $(word 2,$(subst /, ,$(SAMPLE)))
+SAMPLE_DIR      := source/samples/$(SAMPLE)
+SAMPLE_OUT      := build/$(SAMPLE)
+SAMPLE_OBJ      := build/$(SAMPLE)/o
 
-# Object files — all land flat in build/
-OBJECTS := $(patsubst startup/%.s,   $(BUILD)%.o, $(ASM_SRCS)) \
-           $(patsubst source/%.c,    $(BUILD)%.o, $(filter source/%, $(C_SRCS))) \
-           $(patsubst drivers/src/%.c, $(BUILD)%.o, $(filter drivers/src/%, $(C_SRCS))) \
-           $(patsubst libraries/src/%.c, $(BUILD)%.o, $(filter libraries/src/%, $(C_SRCS))) \
-           $(patsubst kernel/src/%.c, $(BUILD)%.o, $(filter kernel/src/%, $(C_SRCS)))
+# Per-sample declarations — expected variables:
+#   SAMPLE_DRIVERS         — source/drivers/src/<name>.c to compile
+#   SAMPLE_KERNEL          — source/kernel/src/<name>.c to compile
+#   SAMPLE_BOOT_COMPONENTS — source/boot/src/<name>.c to compile
+#   SAMPLE_LIBS            — source/libraries/src/<name>.c to compile
+#   SAMPLE_EXTRA_CFLAGS    — additional flags (optional, defaults to empty)
+SAMPLE_EXTRA_CFLAGS :=
+include $(SAMPLE_DIR)/config.mk
 
-# Rules
-all: $(TARGET) $(ELF) $(HEX) $(LIST)
+CFLAGS  := $(CFLAGS_BASE) $(SAMPLE_EXTRA_CFLAGS) -I$(SAMPLE_DIR)
+LIBGCC  := $(shell $(ARMGNU)-gcc $(CFLAGS_BASE) -print-libgcc-file-name)
+LINKER  := $(SAMPLE_DIR)/$(SAMPLE_NAME).ld
 
-rebuild: clean all
+# startup.s: use per-sample override if present, otherwise fall back to shared
+SAMPLE_STARTUP := $(or $(wildcard $(SAMPLE_DIR)/startup.s),startup/startup.s)
 
-$(LIST): $(BUILD)output.elf
-	$(ARMGNU)-objdump -d $(BUILD)output.elf > $(LIST)
+SAMPLE_C_SRCS := \
+  $(SAMPLE_DIR)/main.c \
+  $(patsubst %,source/drivers/src/%.c,  $(SAMPLE_DRIVERS)) \
+  $(patsubst %,source/kernel/src/%.c,   $(SAMPLE_KERNEL)) \
+  $(patsubst %,source/boot/src/%.c,     $(SAMPLE_BOOT_COMPONENTS)) \
+  $(patsubst %,source/libraries/src/%.c,$(SAMPLE_LIBS))
 
-$(TARGET): $(BUILD)output.elf
-	$(ARMGNU)-objcopy $(BUILD)output.elf -O binary $(TARGET)
+SAMPLE_OBJECTS := \
+  $(SAMPLE_OBJ)/startup.o \
+  $(patsubst $(SAMPLE_DIR)/%.c,          $(SAMPLE_OBJ)/%.o, \
+    $(filter $(SAMPLE_DIR)/%,            $(SAMPLE_C_SRCS))) \
+  $(patsubst source/drivers/src/%.c,    $(SAMPLE_OBJ)/%.o, \
+    $(filter source/drivers/src/%,      $(SAMPLE_C_SRCS))) \
+  $(patsubst source/kernel/src/%.c,     $(SAMPLE_OBJ)/%.o, \
+    $(filter source/kernel/src/%,       $(SAMPLE_C_SRCS))) \
+  $(patsubst source/boot/src/%.c,       $(SAMPLE_OBJ)/%.o, \
+    $(filter source/boot/src/%,         $(SAMPLE_C_SRCS))) \
+  $(patsubst source/libraries/src/%.c,  $(SAMPLE_OBJ)/%.o, \
+    $(filter source/libraries/src/%,    $(SAMPLE_C_SRCS)))
 
-$(ELF): $(BUILD)output.elf
-	cp $(BUILD)output.elf $(ELF)
+# ── Targets ──────────────────────────────────────────────────────────────────
+.PHONY: all
+all: $(SAMPLE_OUT)/$(SAMPLE_NAME).elf \
+     $(SAMPLE_OUT)/$(SAMPLE_NAME).img \
+     $(SAMPLE_OUT)/$(SAMPLE_NAME).hex \
+     $(SAMPLE_OUT)/$(SAMPLE_NAME).list
 
-$(HEX): $(BUILD)output.elf
-	$(ARMGNU)-objcopy $(BUILD)output.elf -O ihex $(HEX)
+$(SAMPLE_OUT)/$(SAMPLE_NAME).elf: $(SAMPLE_OBJECTS) $(LINKER)
+	$(ARMGNU)-ld --no-undefined $(SAMPLE_OBJECTS) \
+	  -Map $(SAMPLE_OUT)/$(SAMPLE_NAME).map \
+	  -o $@ -T $(LINKER) $(LIBGCC)
 
-LIBGCC := $(shell $(ARMGNU)-gcc $(CFLAGS) -print-libgcc-file-name)
+$(SAMPLE_OUT)/$(SAMPLE_NAME).img: $(SAMPLE_OUT)/$(SAMPLE_NAME).elf
+	$(ARMGNU)-objcopy $< -O binary $@
 
-$(BUILD)output.elf: $(OBJECTS) $(LINKER)
-	$(ARMGNU)-ld --no-undefined $(OBJECTS) -Map $(MAP) -o $(BUILD)output.elf -T $(LINKER) $(LIBGCC)
+$(SAMPLE_OUT)/$(SAMPLE_NAME).hex: $(SAMPLE_OUT)/$(SAMPLE_NAME).elf
+	$(ARMGNU)-objcopy $< -O ihex $@
 
-$(BUILD)%.o: startup/%.s | $(BUILD)
+$(SAMPLE_OUT)/$(SAMPLE_NAME).list: $(SAMPLE_OUT)/$(SAMPLE_NAME).elf
+	$(ARMGNU)-objdump -d $< > $@
+
+# ── Compile rules ─────────────────────────────────────────────────────────────
+$(SAMPLE_OBJ)/startup.o: $(SAMPLE_STARTUP) | $(SAMPLE_OBJ)
 	$(ARMGNU)-as $< -o $@
 
-$(BUILD)%.o: source/%.c | $(BUILD)
+$(SAMPLE_OBJ)/%.o: $(SAMPLE_DIR)/%.c | $(SAMPLE_OBJ)
 	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD)%.o: drivers/src/%.c | $(BUILD)
+$(SAMPLE_OBJ)/%.o: source/drivers/src/%.c | $(SAMPLE_OBJ)
 	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD)%.o: libraries/src/%.c | $(BUILD)
+$(SAMPLE_OBJ)/%.o: source/kernel/src/%.c | $(SAMPLE_OBJ)
 	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD)%.o: kernel/src/%.c | $(BUILD)
+$(SAMPLE_OBJ)/%.o: source/boot/src/%.c | $(SAMPLE_OBJ)
 	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD):
-	mkdir -p $(BUILD)
+$(SAMPLE_OBJ)/%.o: source/libraries/src/%.c | $(SAMPLE_OBJ)
+	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
 
-clean:
-	-rm -rf $(BUILD)
-	-rm -f $(TARGET) $(ELF) $(HEX) $(BOOT_TARGET) $(BOOT_ELF) $(BOOT_HEX)
-	-rm -f $(LIST)
-	-rm -f $(MAP)
+$(SAMPLE_OUT):
+	mkdir -p $@
 
-# ── Bootloader ────────────────────────────────────────────────────────────────
-BOOT_BUILD  = build/boot/
-BOOT_TARGET = boot7l.img
-BOOT_ELF    = boot7l.elf
-BOOT_LINKER = boot/boot.ld
-
-BOOT_CFLAGS = -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall -g \
-              -march=armv8-a+crc \
-              -Iboot/inc -Idrivers/inc -Ikernel/inc -Ilibraries/inc \
-              -DUART_MINIMAL
-
-BOOT_C_SRCS := boot/app/main.c \
-               $(wildcard boot/src/*.c) \
-               drivers/src/gpio.c \
-               drivers/src/jtag.c \
-               drivers/src/crc.c \
-               drivers/src/emmc.c \
-               drivers/src/uart.c \
-               kernel/src/boot_flags.c \
-               kernel/src/dfu_trigger.c
-
-BOOT_ASM_SRCS := boot/startup.s
-
-BOOT_OBJECTS := $(patsubst boot/%.s,           $(BOOT_BUILD)%.o, $(BOOT_ASM_SRCS)) \
-                $(patsubst boot/app/%.c,       $(BOOT_BUILD)%.o, $(filter boot/app/%, $(BOOT_C_SRCS))) \
-                $(patsubst boot/src/%.c,       $(BOOT_BUILD)%.o, $(filter boot/src/%, $(BOOT_C_SRCS))) \
-                $(patsubst drivers/src/%.c,    $(BOOT_BUILD)%.o, $(filter drivers/src/%, $(BOOT_C_SRCS))) \
-                $(patsubst libraries/src/%.c,  $(BOOT_BUILD)%.o, $(filter libraries/src/%, $(BOOT_C_SRCS))) \
-                $(patsubst kernel/src/%.c,     $(BOOT_BUILD)%.o, $(filter kernel/src/%, $(BOOT_C_SRCS)))
-
-BOOT_HEX = boot7l.hex
-
-boot: $(BOOT_TARGET) $(BOOT_ELF) $(BOOT_HEX)
-
-$(BOOT_HEX): $(BOOT_BUILD)boot.elf
-	$(ARMGNU)-objcopy $(BOOT_BUILD)boot.elf -O ihex $(BOOT_HEX)
-
-$(BOOT_TARGET): $(BOOT_BUILD)boot.elf
-	$(ARMGNU)-objcopy $(BOOT_BUILD)boot.elf -O binary $(BOOT_TARGET)
-
-$(BOOT_ELF): $(BOOT_BUILD)boot.elf
-	cp $(BOOT_BUILD)boot.elf $(BOOT_ELF)
-
-$(BOOT_BUILD)boot.elf: $(BOOT_OBJECTS) $(BOOT_LINKER) | $(BOOT_BUILD)
-	$(ARMGNU)-ld --no-undefined $(BOOT_OBJECTS) -Map $(BOOT_BUILD)boot.map \
-	    -o $(BOOT_BUILD)boot.elf -T $(BOOT_LINKER) $(LIBGCC)
-
-$(BOOT_BUILD)%.o: boot/%.s | $(BOOT_BUILD)
-	$(ARMGNU)-as $< -o $@
-
-$(BOOT_BUILD)%.o: boot/app/%.c | $(BOOT_BUILD)
-	$(ARMGNU)-gcc $(BOOT_CFLAGS) -c $< -o $@
-
-$(BOOT_BUILD)%.o: boot/src/%.c | $(BOOT_BUILD)
-	$(ARMGNU)-gcc $(BOOT_CFLAGS) -c $< -o $@
-
-$(BOOT_BUILD)%.o: drivers/src/%.c | $(BOOT_BUILD)
-	$(ARMGNU)-gcc $(BOOT_CFLAGS) -c $< -o $@
-
-$(BOOT_BUILD)%.o: libraries/src/%.c | $(BOOT_BUILD)
-	$(ARMGNU)-gcc $(BOOT_CFLAGS) -c $< -o $@
-
-$(BOOT_BUILD)%.o: kernel/src/%.c | $(BOOT_BUILD)
-	$(ARMGNU)-gcc $(BOOT_CFLAGS) -c $< -o $@
-
-$(BOOT_BUILD):
-	mkdir -p $(BOOT_BUILD)
+$(SAMPLE_OBJ):
+	mkdir -p $@
 
 # ── QEMU ─────────────────────────────────────────────────────────────────────
-# Requires: qemu-system-arm in PATH
-#   Windows:  winget install QEMU.QEMU   (then re-open terminal)
-#   macOS:    brew install qemu
-#   Linux:    sudo apt install qemu-system-arm
-#
-# -M raspi4b         : Raspberry Pi 4B machine (closest QEMU model to CM4)
-# -kernel            : raw binary image (kernel7l.img)
-# -serial stdio      : UART0 (PL011 @ 0xFE201000) → your terminal
-# -nographic         : no GUI window, everything in terminal
-# -d int             : log every CPU exception/interrupt taken
-# -D qemu.log        : write that log to qemu.log (open separately to read)
-#
-# Exit QEMU: Ctrl+A, then X
 QEMU = qemu-system-arm
 
-qemu: $(BUILD)output.elf
-	$(QEMU) -M raspi2b -kernel $(BUILD)output.elf -serial stdio -display none -monitor none -d int -D qemu.log
+qemu: $(SAMPLE_OUT)/$(SAMPLE_NAME).elf
+	$(QEMU) -M raspi2b -kernel $< -serial stdio -display none -monitor none \
+	  -d int -D qemu.log
+
+else
+# ─────────────────────────────────────────────────────────────────────────────
+# Default: build all valid samples from samples.json
+# ─────────────────────────────────────────────────────────────────────────────
+
+VALID_SAMPLES := $(shell grep -oE '"[a-z_]+/[a-z_]+"' samples.json | tr -d '"')
+
+.PHONY: all clean $(VALID_SAMPLES)
+all: $(VALID_SAMPLES)
+
+$(VALID_SAMPLES):
+	$(MAKE) SAMPLE=$@
+
+clean:
+	rm -rf build/
+
+endif

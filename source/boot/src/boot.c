@@ -2,7 +2,7 @@
 
 #include "boot_flags.h"
 #include "crc.h"
-#include "dfu.h"
+#include "dfu_receive.h"
 #include "emmc.h"
 #include "memory_map.h"
 #include "uart.h"

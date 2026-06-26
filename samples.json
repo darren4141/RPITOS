@@ -1,0 +1,6 @@
+{
+  "samples": [
+    "boot/bootloader",
+    "rtos/full_demo"
+  ]
+}
