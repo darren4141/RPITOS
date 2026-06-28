@@ -1,5 +1,5 @@
 # Drivers to compile
-SAMPLE_DRIVERS         := gpio uart emmc crc jtag
+SAMPLE_DRIVERS         := gpio uart emmc crc jtag watchdog
 
 # RTOS kernel components (none — bootloader does not use the RTOS)
 SAMPLE_KERNEL          :=
@@ -11,4 +11,4 @@ SAMPLE_BOOT_COMPONENTS := boot dfu_receive dfu_trigger boot_flags
 SAMPLE_LIBS            :=
 
 # Extra compiler flags specific to this sample
-SAMPLE_EXTRA_CFLAGS    := -march=armv8-a+crc -DUART_MINIMAL
+SAMPLE_EXTRA_CFLAGS    := -march=armv8-a+crc -DUART_MINIMAL -DWATCHDOG_MINIMAL
