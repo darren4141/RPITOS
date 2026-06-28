@@ -59,7 +59,7 @@ static void bootloader_init()
 {
   StatusCode status;
   uart_init(UART_BAUDRATE_115200);
-  uart_print("Bootloader start - SELF UPDATE ARTIFACT, initializing components\r\n");
+  uart_print("Bootloader start, initializing components\r\n");
   uart_print("uart initialized\r\n");
   jtag_gpio_init();
   uart_print("jtag initialized\r\n");
