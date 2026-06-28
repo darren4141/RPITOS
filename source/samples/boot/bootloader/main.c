@@ -42,7 +42,6 @@ static void bootloader_recovery_window()
     asm volatile ("mrrc p15, 0, %0, %1, c14" : "=r" (lo), "=r" (hi));
     if ((((uint64_t)hi << 32) | lo) - start >= ticks) {
       uart_print("boot: recovery window closed\r\n");
-      boot_flags.dfu_requested = DFU_REQUEST;
       break;
     }
     uint8_t byte;
