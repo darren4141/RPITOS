@@ -9,6 +9,7 @@
 #include "jtag.h"
 #include "status.h"
 #include "uart.h"
+#include "watchdog.h"
 
 #define NUM_RETRIES    10U
 
@@ -41,7 +42,6 @@ static void bootloader_recovery_window()
     asm volatile ("mrrc p15, 0, %0, %1, c14" : "=r" (lo), "=r" (hi));
     if ((((uint64_t)hi << 32) | lo) - start >= ticks) {
       uart_print("boot: recovery window closed\r\n");
-      boot_flags.dfu_requested = DFU_REQUEST;
       break;
     }
     uint8_t byte;
@@ -63,7 +63,17 @@ static void bootloader_init()
   uart_print("uart initialized\r\n");
   jtag_gpio_init();
   uart_print("jtag initialized\r\n");
+
+  // Read PM_RSTS before boot_flags_init() — boot_flags_init() may clobber
+  // reset_reason with RESET_REASON_COLD if RAM didn't survive the reset.
+  // PM_RSTS is a sticky hardware register that survives all reset types.
+  bool wdt_reset = watchdog_was_wdt_reset();
+
   boot_flags_init();
+  if (wdt_reset) {
+    boot_flags.reset_reason = RESET_REASON_WATCHDOG;
+    uart_print("boot: *** previous reset caused by watchdog timeout ***\r\n");
+  }
   uart_print("boot flags initialized\r\n");
 
   status = emmc_init();

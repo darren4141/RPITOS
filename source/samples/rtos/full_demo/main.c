@@ -12,6 +12,7 @@
 #include "semaphore.h"
 #include "task.h"
 #include "uart.h"
+#include "watchdog.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -137,7 +138,14 @@ void kmain(void)
   uart_init(UART_BAUDRATE_115200);
   uart_print("uart initialized!\r\n");
 
-  scheduler_init(&clk_freq, hz, &tick_count);
+    << << << < HEAD
+    == == == =
+      if (boot_flags_valid() && (boot_flags.reset_reason == RESET_REASON_WATCHDOG)) {
+    uart_print("*** previous reset caused by watchdog timeout ***\r\n");
+    }
+
+    >> >> >> > b209abc(watchdog impl)
+    scheduler_init(&clk_freq, hz, &tick_count);
 
   uart_task_start();
 
@@ -187,6 +195,8 @@ void kmain(void)
   queue_init(&test_queue, 4, sizeof(uint32_t));
   semaphore_init(&shared_semaphore, 1, 1);
   dfu_trigger_reset();
+  watchdog_init(5);
+  watchdog_task_start();
   __asm__ volatile ("cpsie i" ::: "memory");
 
   schedulerStart();

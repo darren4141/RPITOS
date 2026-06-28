@@ -12,6 +12,7 @@
 #include "semaphore.h"
 #include "task.h"
 #include "uart.h"
+#include "watchdog.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -137,9 +138,14 @@ void kmain(void)
   uart_init(UART_BAUDRATE_115200);
   uart_print("uart initialized!\r\n");
 
+  if (boot_flags_valid() && boot_flags.reset_reason == RESET_REASON_WATCHDOG) {
+    uart_print("*** previous reset caused by watchdog timeout ***\r\n");
+  }
+
   scheduler_init(&clk_freq, hz, &tick_count);
 
   uart_task_start();
+  watchdog_init(5);
 
   uart_print("Starting main...\r\n");
 
@@ -176,6 +182,11 @@ void kmain(void)
   ret = task_create(dfu_trigger_task, 1024, TASK_PRIORITY_5, NULL, &tcb_dfu_trigger);
   if (ret != E_OK) {
     uart_printf("Create dfu task failed with exit code %d\r\n", ret);
+  }
+
+  ret = watchdog_task_start();
+  if (ret != E_OK) {
+    uart_printf("Create watchdog task failed with exit code %d\r\n", ret);
   }
 
   uart_print("Initializing GIC...\r\n");
