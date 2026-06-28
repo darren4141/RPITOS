@@ -35,11 +35,12 @@ except ImportError:
 PACKET_SOF = 0xAA
 PACKET_EOF = 0xBB
 
-# Commands (must match dfu.h)
-CMD_START  = 0x02
-CMD_DATA   = 0x03
-CMD_FINISH = 0x04
-CMD_ABORT  = 0x05
+# Commands (must match Commands enum in dfu_receive.h)
+CMD_START             = 0x02
+CMD_START_SELF_UPDATE = 0x03
+CMD_DATA              = 0x04
+CMD_FINISH            = 0x05
+CMD_ABORT             = 0x06
 
 # Responses (must match DFU_ACK / DFU_NACK in dfu.c)
 ACK  = 0x06
@@ -257,9 +258,10 @@ def send_abort(ser: "serial.Serial") -> None:
 # DFU flash
 # ---------------------------------------------------------------------------
 
-def flash(ser: "serial.Serial", image_path: str) -> bool:
+def flash(ser: "serial.Serial", image_path: str, self_update: bool = False) -> bool:
     """
     Flash image_path over the already-open serial port.
+    Pass self_update=True to use CMD_START_SELF_UPDATE (bootloader slot).
     Returns True on success, False on failure.
     """
     with open(image_path, "rb") as f:
@@ -293,13 +295,16 @@ def flash(ser: "serial.Serial", image_path: str) -> bool:
             print("Error: target never responded to the DFU trigger key")
             return False
 
-        # ── CMD_START ─────────────────────────────────────────────────────────────
-        # StartPacket: version_num (u16 LE), app_length (u16 LE), crc (u32 LE)
-        ser.write(build_packet(CMD_START, struct.pack("<HHI", 1, app_length, app_crc)))
-        if not wait_ack(router,"CMD_START"):
+        # ── CMD_START / CMD_START_SELF_UPDATE ────────────────────────────────────
+        # StartPacket: version_num (u32 LE), fw_length (u32 LE), crc (u32 LE)
+        start_cmd   = CMD_START_SELF_UPDATE if self_update else CMD_START
+        start_label = "CMD_START_SELF_UPDATE" if self_update else "CMD_START"
+        slot_label  = "bootloader" if self_update else "app"
+        ser.write(build_packet(start_cmd, struct.pack("<III", 1, app_length, app_crc)))
+        if not wait_ack(router, start_label):
             send_abort(ser)
             return False
-        print(f"[START ] version=1  length={app_length} B  ✓")
+        print(f"[START ] version=1  length={app_length} B  slot={slot_label}  ✓")
 
         # ── CMD_DATA ──────────────────────────────────────────────────────────────
         total        = len(img)
@@ -359,6 +364,8 @@ def main() -> None:
                         help="Baud rate (default: 115200)")
     parser.add_argument("-t", "--terminal", action="store_true",
                         help="Skip flashing and go straight to terminal mode")
+    parser.add_argument("--self-update", action="store_true",
+                        help="Flash into the bootloader slot (CMD_START_SELF_UPDATE)")
     args = parser.parse_args()
 
     print(f"Port  : {args.port} @ {args.baud} baud")
@@ -367,7 +374,7 @@ def main() -> None:
         time.sleep(0.1)  # let UART settle
 
         if not args.terminal:
-            ok = flash(ser, args.image)
+            ok = flash(ser, args.image, self_update=args.self_update)
             if not ok:
                 print("Flash failed — dropping into terminal anyway.")
             print()

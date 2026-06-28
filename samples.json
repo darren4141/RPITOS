@@ -1,5 +1,6 @@
 {
   "samples": [
+    "boot/bootstrap",
     "boot/bootloader",
     "rtos/full_demo",
     "rtos/heavy_overlap"

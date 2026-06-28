@@ -42,11 +42,14 @@ _reset_handler:
 
 _stack_setup:
 
-    @ ---- Disable D-cache and I-cache (must be in SVC mode) ----
+    @ ---- Disable D-cache, I-cache, alignment checking (must be in SVC mode) ----
+    @ GPU firmware may leave SCTLR.A (bit 1) set; clear it so unaligned accesses
+    @ are handled by the core rather than faulting.
     mrc  p15, 0, r0, c1, c0, 0
-    bic  r0, r0, #(1 << 2)
-    bic  r0, r0, #(1 << 12)
-    bic  r0, r0, #(1 << 13)
+    bic  r0, r0, #(1 << 1)        @ A: alignment check off
+    bic  r0, r0, #(1 << 2)        @ C: D-cache off
+    bic  r0, r0, #(1 << 12)       @ I: I-cache off
+    bic  r0, r0, #(1 << 13)       @ V: high vectors off (VBAR used instead)
     mcr  p15, 0, r0, c1, c0, 0
     dsb
     isb
@@ -93,7 +96,25 @@ hang$:
 _undef_handler:     b _undef_handler
 _svc_handler:       b _svc_handler
 _prefetch_handler:  b _prefetch_handler
-_data_handler:      b _data_handler
+
+@ Data abort: print fault PC, DFAR, and DFSR then hang.
+@ ABT-mode stack is set up by _stack_setup so bl-to-C works.
+@ AAPCS: r0=fmt, r1=faulting_PC, r2=DFAR, r3=DFSR
+_data_handler:
+    sub  r1, lr, #8                @ r1 = PC of faulting instruction (LR_abt = PC+8)
+    mrc  p15, 0, r2, c6, c0, 0    @ r2 = DFAR
+    mrc  p15, 0, r3, c5, c0, 0    @ r3 = DFSR
+    adr  r0, _data_abort_fmt       @ r0 = format string (PC-relative, no literal pool)
+    bl   uart_printf
+_data_hang$:
+    b    _data_hang$
+
+@ Format string inline — adr above reaches here within a few bytes.
+@ .align 2 keeps the next code label on a 4-byte boundary.
+_data_abort_fmt:
+    .asciz "EXCEPTION: data abort  PC=0x%08X  DFAR=0x%08X  DFSR=0x%08X\r\n"
+    .align 2
+
 _reserved_handler:  b _reserved_handler
 _irq_handler:       b _irq_handler
 _fiq_handler:       b _fiq_handler

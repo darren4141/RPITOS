@@ -7,6 +7,7 @@
 #include "dfu_trigger.h"
 #include "emmc.h"
 #include "uart.h"
+#include "watchdog.h"
 
 #define DFU_ACK               0x06
 #define DFU_NACK              0x15
@@ -18,6 +19,7 @@ static uint8_t current_sector[SECTOR_SIZE];
 static uint32_t current_sector_counter;
 static bool unwritten_sector;
 static bool started;
+static bool is_self_update;
 
 static StatusCode dfu_packet_receive(DFU_Packet *packet)
 {
@@ -108,6 +110,7 @@ StatusCode dfu_init()
   current_sector_counter = 0;
   unwritten_sector = false;
   started = false;
+  is_self_update = false;
 
   return E_OK;
 }
@@ -129,7 +132,7 @@ StatusCode dfu_receive()
 
   bool flags_crc_ok_set = false;
   uint32_t img_expected_crc;
-  uint32_t app_length = 0;
+  uint32_t img_length = 0;
   uint32_t bytes_hashed = 0;
   CRC32_t crc_ctx;
 
@@ -146,24 +149,55 @@ StatusCode dfu_receive()
 
     case CMD_START:
       if (!started) {
-        if (packet.LEN != 8U) {
+        if (packet.LEN != sizeof(StartPacket)) {
           uart_tx_raw(DFU_NACK);
           state = DFU_STATE_ABORT;
           break;
         }
         state = DFU_STATE_RECIEVE_DATA;
-        for (uint32_t i = 0; i < 8U; i++) {
+        for (uint32_t i = 0; i < sizeof(StartPacket); i++) {
           current_sector[i] = packet.DATA[i];
         }
 
         const StartPacket *start_pkt = (const StartPacket *)packet.DATA;
         img_expected_crc = start_pkt->crc;
-        app_length = start_pkt->app_length;
+        img_length = start_pkt->fw_length;
         crc32_start(&crc_ctx);
 
         emmc_write_blocks(EMMC_SECTOR_APP, current_sector, 1U);
         sectors_written = 1;
 
+        is_self_update = false;
+        started = true;
+        uart_tx_raw(DFU_ACK);
+      }
+      else {
+        uart_tx_raw(DFU_NACK);
+        state = DFU_STATE_ABORT;
+      }
+      break;
+
+    case CMD_START_SELF_UPDATE:
+      if (!started) {
+        if (packet.LEN != sizeof(StartPacket)) {
+          uart_tx_raw(DFU_NACK);
+          state = DFU_STATE_ABORT;
+          break;
+        }
+        state = DFU_STATE_RECIEVE_DATA;
+        for (uint32_t i = 0; i < sizeof(StartPacket); i++) {
+          current_sector[i] = packet.DATA[i];
+        }
+
+        const StartPacket *start_pkt = (const StartPacket *)packet.DATA;
+        img_expected_crc = start_pkt->crc;
+        img_length = start_pkt->fw_length;
+        crc32_start(&crc_ctx);
+
+        emmc_write_blocks(EMMC_SECTOR_BOOTLOADER, current_sector, 1U);
+        sectors_written = 1;
+
+        is_self_update = true;
         started = true;
         uart_tx_raw(DFU_ACK);
       }
@@ -174,57 +208,44 @@ StatusCode dfu_receive()
       break;
 
     case CMD_DATA:
-      // our packet length must be a multiple of 32 bytes
+      // our packet length must be a multiple of 4 bytes
       if (packet.LEN % 4 != 0) {
         uart_tx_raw(DFU_NACK);
         state = DFU_STATE_ABORT;
         break;
       }
       if (state == DFU_STATE_RECIEVE_DATA) {
-        // Set the crc_ok flag to 0 so we know the data in eMMC is now bad (mid-write)
-        if (!flags_crc_ok_set) {
+        // Only invalidate app CRC flag for app updates — self-update doesn't
+        // touch the app image so its validity should be preserved.
+        if (!flags_crc_ok_set && !is_self_update) {
           flags_crc_ok_set = true;
           boot_flags.fw_crc_ok = 0;
         }
 
-        // If this data write meets or exceeds sector size, we must write a sector
+        uint32_t base_sector = is_self_update ? EMMC_SECTOR_BOOTLOADER : EMMC_SECTOR_APP;
+
         if (current_sector_counter + packet.LEN >= SECTOR_SIZE) {
-          // Calculate the overflow (hopefully zero)
           uint32_t diff = current_sector_counter + packet.LEN - SECTOR_SIZE;
 
-          // Copy over what we need
           for (uint32_t i = 0; i < packet.LEN - diff; i++) {
             current_sector[current_sector_counter + i] = packet.DATA[i];
           }
 
-          // Write the buffer
-          emmc_write_blocks(EMMC_SECTOR_APP + sectors_written, current_sector, 1U);
+          emmc_write_blocks(base_sector + sectors_written, current_sector, 1U);
 
-          // Copy over the overflow to the start of the buffer
           for (uint32_t i = 0; i < diff; i++) {
             current_sector[i] = packet.DATA[packet.LEN - diff + i];
           }
 
-          // Increment sectors written and mark that we have no unwritten sectors
           sectors_written++;
-          if (diff == 0) {
-            unwritten_sector = false;
-          }
-          else {
-            unwritten_sector = true;
-          }
-
-          // Update current_sector_counter
-
+          unwritten_sector = (diff != 0);
           current_sector_counter = diff;
         }
         else {
-          // Set unwritten sector if we have not
           if (!unwritten_sector) {
             unwritten_sector = true;
           }
 
-          // Copy over data
           for (uint32_t i = 0; i < packet.LEN; i++) {
             current_sector[current_sector_counter + i] = packet.DATA[i];
           }
@@ -233,8 +254,8 @@ StatusCode dfu_receive()
         }
 
         uint32_t to_hash = packet.LEN;
-        if (bytes_hashed + to_hash > app_length) {
-          to_hash = (app_length > bytes_hashed) ? app_length - bytes_hashed : 0;
+        if (bytes_hashed + to_hash > img_length) {
+          to_hash = (img_length > bytes_hashed) ? img_length - bytes_hashed : 0;
         }
         if (to_hash > 0) {
           crc32_update(&crc_ctx, packet.DATA, to_hash);
@@ -259,17 +280,24 @@ StatusCode dfu_receive()
         break;
       }
 
-      // check if we need to write one more sector
+      uint32_t base_sector = is_self_update ? EMMC_SECTOR_BOOTLOADER : EMMC_SECTOR_APP;
+
       if (unwritten_sector) {
-        // Pad the final sector
         for (uint32_t i = current_sector_counter; i < SECTOR_SIZE; i++) {
           current_sector[i] = 0;
         }
-
-        // write it
-        emmc_write_blocks(EMMC_SECTOR_APP + sectors_written, current_sector, 1U);
+        emmc_write_blocks(base_sector + sectors_written, current_sector, 1U);
       }
+
       uart_tx_raw(DFU_ACK);
+
+      if (is_self_update) {
+        uart_print("DFU: bootloader update complete, resetting\r\n");
+        uart_deinit();
+        watchdog_trigger_reset();
+        // never reached
+      }
+
       state = DFU_STATE_DONE;
       break;
     }

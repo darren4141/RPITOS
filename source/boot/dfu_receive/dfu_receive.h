@@ -10,13 +10,14 @@
 #define PACKET_SOF          0xAA
 
 typedef enum {
-  CMD_REQ        = 0x01,
-  CMD_START      = 0x02,
-  CMD_DATA       = 0x03,
-  CMD_FINISH     = 0x04,
-  CMD_ABORT      = 0x05,
-  CMD_GET_STATUS = 0x06,
-  CMD_RECOVER    = 0x07,
+  CMD_REQ              = 0x01,
+  CMD_START            = 0x02,
+  CMD_START_SELF_UPDATE = 0x03,
+  CMD_DATA             = 0x04,
+  CMD_FINISH           = 0x05,
+  CMD_ABORT            = 0x06,
+  CMD_GET_STATUS       = 0x07,
+  CMD_RECOVER          = 0x08,
   NUM_CMDS
 } Commands;
 
@@ -45,9 +46,12 @@ typedef struct DFU_Packet {
   uint32_t CRC;
 } DFU_Packet;
 
+// Header sector written to eMMC before the binary for both app and bootloader.
+// All fields are uint32_t so the struct is naturally word-aligned — no packing
+// needed, no unaligned-access hazards on bare-metal device memory.
 typedef struct StartPacket {
-  uint16_t version_num;
-  uint16_t app_length;
+  uint32_t version_num;
+  uint32_t fw_length;
   uint32_t crc;
 } StartPacket;
 
