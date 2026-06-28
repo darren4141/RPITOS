@@ -24,11 +24,11 @@ StatusCode boot_validateApp()
   emmc_read_blocks(EMMC_SECTOR_APP, current_sector, 1U);
   const StartPacket *start_pkt = (const StartPacket *)current_sector;
 
-  if ((start_pkt->version_num != 1) || (start_pkt->app_length == 0)) {
+  if ((start_pkt->version_num != 1) || (start_pkt->fw_length == 0)) {
     return E_CORRUPTED;
   }
 
-  uint32_t remaining = start_pkt->app_length;
+  uint32_t remaining = start_pkt->fw_length;
   uint32_t expected_crc = start_pkt->crc;
   uint32_t sector = EMMC_SECTOR_APP + 1;
 
@@ -62,9 +62,9 @@ StatusCode boot_loadApp()
 
   StartPacket *start_pkt = (StartPacket *)current_sector;
 
-  uart_printf("App details: version: %u length: %uB\r\n", start_pkt->version_num, start_pkt->app_length);
+  uart_printf("App details: version: %u length: %uB\r\n", start_pkt->version_num, start_pkt->fw_length);
 
-  uint32_t ulSectors = BYTES_TO_SECTORS(start_pkt->app_length);
+  uint32_t ulSectors = BYTES_TO_SECTORS(start_pkt->fw_length);
 
   emmc_read_blocks(EMMC_SECTOR_APP + 1, (void *)APP_START_ADDR, ulSectors);
 

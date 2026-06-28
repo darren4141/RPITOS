@@ -10,15 +10,14 @@ StatusCode crc32_init()
 static void crc32_hw_update(uint32_t *crc, const uint8_t *data, size_t len)
 {
   while (len >= 4) {
-    uint32_t val;
-    __builtin_memcpy(&val, data, 4);
+    uint32_t val = (uint32_t)data[0] | ((uint32_t)data[1] << 8)
+                 | ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
     asm volatile ("crc32w %0, %1, %2" : "=r" (*crc) : "r" (*crc), "r" (val));
     data += 4;
     len -= 4;
   }
   if (len >= 2) {
-    uint16_t val;
-    __builtin_memcpy(&val, data, 2);
+    uint16_t val = (uint16_t)data[0] | ((uint16_t)data[1] << 8);
     asm volatile ("crc32h %0, %1, %2" : "=r" (*crc) : "r" (*crc), "r" ((uint32_t)val));
     data += 2;
     len -= 2;

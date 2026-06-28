@@ -12,7 +12,7 @@
 
 ARMGNU ?= arm-none-eabi
 
-CFLAGS_BASE := -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall -g -pipe \
+CFLAGS_BASE := -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall -g -pipe -mno-unaligned-access \
                $(patsubst %,-I%,$(wildcard source/drivers/*)) \
                $(patsubst %,-I%,$(wildcard source/kernel/*)) \
                $(patsubst %,-I%,$(wildcard source/boot/*)) \
@@ -41,8 +41,8 @@ CFLAGS  := $(CFLAGS_BASE) $(SAMPLE_EXTRA_CFLAGS) -I$(SAMPLE_DIR)
 LIBGCC  := $(shell $(ARMGNU)-gcc $(CFLAGS_BASE) -print-libgcc-file-name)
 LINKER  := $(SAMPLE_DIR)/$(SAMPLE_NAME).ld
 
-# startup.s: use per-sample override if present, otherwise fall back to shared
-SAMPLE_STARTUP := $(or $(wildcard $(SAMPLE_DIR)/startup.s),startup/startup.s)
+# startup.s priority: config.mk SAMPLE_STARTUP_OVERRIDE → per-sample startup.s → shared startup/startup.s
+SAMPLE_STARTUP := $(or $(SAMPLE_STARTUP_OVERRIDE),$(wildcard $(SAMPLE_DIR)/startup.s),startup/startup.s)
 
 SAMPLE_OBJECTS := \
   $(SAMPLE_OBJ)/startup.o \

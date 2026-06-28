@@ -1,5 +1,5 @@
 SECTIONS {
-	.init 0x10000 : {
+	.init 0x8000 : {
 		*(.init)
 	}
 
@@ -38,10 +38,11 @@ SECTIONS {
 		_svc_stack_bottom = .;  . += 0x1000; _svc_stack_top = .;
 	}
 
-	ASSERT(. <= 0x88000, "Bootloader exceeds available region (0x10000–0x88000)")
+	/* Bootstrap must not grow into the bootloader load region at 0x10000 */
+	ASSERT(. <= 0x10000, "Bootstrap exceeds 32 KB — overlaps bootloader load address")
 
-	/* Shared flags — 1024 bytes of RAM shared between bootloader and kernel.
-	   Both images agree on 0x88000–0x88400; no data is emitted here. */
+	/* Shared flags region — no data emitted, symbols needed by boot_flags.c
+	   if it is ever added to the bootstrap. */
 	.shared_flags 0x88000 (NOLOAD) : {
 		_shared_flags_start = .;
 		*(.shared_flags)

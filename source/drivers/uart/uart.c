@@ -90,11 +90,14 @@ StatusCode uart_rx_timed(uint8_t *out, uint32_t timeout_ms)
   return E_OK;
 }
 
+void uart_drain(void)
+{
+  while (UART0->FR & FR_BUSY) {}
+}
+
 void uart_deinit()
 {
-  // Drain TX FIFO before touching control registers — disabling mid-byte
-  // corrupts the current character on the wire.
-  while (UART0->FR & FR_BUSY) {}
+  uart_drain();  // wait for TX FIFO before touching control registers
 
   UART0->CR &= ~(CR_UARTEN | CR_TXE | CR_RXE);
   UART0->LCRH &= ~LCRH_FEN;
