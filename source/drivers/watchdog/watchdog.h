@@ -14,15 +14,29 @@
 #define PM_RSTS_OFFSET            0x28UL
 #define PM_RSTC_WRCFG_FULL_RESET  0x020UL
 
+// What the bootloader should do when wdt_reset_count exceeds wdt_reset_tolerance.
+typedef enum {
+  WATCHDOG_RESET_POLICY_FORCE_UPDATE = 0,  // force into DFU receive loop
+  WATCHDOG_RESET_POLICY_JUMP_SLOT_B  = 1,  // reserved — app slot B (not implemented)
+  WATCHDOG_RESET_POLICY_ROLLBACK     = 2,  // reserved — rollback to previous slot (not implemented)
+} WatchdogResetPolicy;
+
+// Why the watchdog reset policy was triggered. Stored in boot_flags for
+// future diagnostics. Not yet written by the bootloader.
+typedef enum {
+  WATCHDOG_RESET_REASON_NONE           = 0,
+  WATCHDOG_RESET_REASON_COUNT_EXCEEDED = 1,
+} WatchdogResetReason;
+
 // Returns true if the previous boot was caused by a watchdog timeout.
 // Call before watchdog_init() — writing PM_RSTC on init may clear the
 // sticky bits in PM_RSTS.
 bool watchdog_was_wdt_reset(void);
 
-// Arm the watchdog with a [1, 15] second timeout. Values outside that range
-// are clamped. After this returns, the hardware will reset unless
-// watchdog_kick() is called within timeout_s seconds.
-StatusCode watchdog_init(uint32_t timeout_s);
+// Arm the watchdog with a [1, 15] second timeout (clamped). Sets the reset
+// policy and tolerance: after tolerance watchdog resets the bootloader applies
+// policy. A negative tolerance means the policy never fires (infinite retries).
+StatusCode watchdog_init(uint32_t timeout_s, WatchdogResetPolicy policy, int32_t tolerance);
 
 // Reset the countdown. Safe to call from any context — a single 32-bit
 // MMIO write is atomic on Cortex-A72.

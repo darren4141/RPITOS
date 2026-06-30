@@ -41,6 +41,7 @@ static void bootloader_recovery_window()
   while (1) {
     asm volatile ("mrrc p15, 0, %0, %1, c14" : "=r" (lo), "=r" (hi));
     if ((((uint64_t)hi << 32) | lo) - start >= ticks) {
+      boot_flags.dfu_requested = DFU_REQUEST;
       uart_print("boot: recovery window closed\r\n");
       break;
     }
@@ -72,7 +73,20 @@ static void bootloader_init()
   boot_flags_init();
   if (wdt_reset) {
     boot_flags.reset_reason = RESET_REASON_WATCHDOG;
-    uart_print("boot: *** previous reset caused by watchdog timeout ***\r\n");
+    boot_flags.wdt_reset_count++;
+    uart_printf("boot: *** WDT reset #%u (tolerance=%d, policy=%u) ***\r\n",
+                boot_flags.wdt_reset_count,
+                boot_flags.wdt_reset_tolerance,
+                boot_flags.wdt_reset_policy);
+
+    if (boot_flags.wdt_reset_tolerance >= 0 &&
+        (int32_t)boot_flags.wdt_reset_count > boot_flags.wdt_reset_tolerance) {
+      if (boot_flags.wdt_reset_policy == (uint32_t)WATCHDOG_RESET_POLICY_FORCE_UPDATE) {
+        uart_print("boot: tolerance exceeded, forcing DFU\r\n");
+        boot_flags.dfu_requested = DFU_REQUEST;
+        boot_flags.reset_reason  = RESET_REASON_SOFTWARE;
+      }
+    }
   }
   uart_print("boot flags initialized\r\n");
 

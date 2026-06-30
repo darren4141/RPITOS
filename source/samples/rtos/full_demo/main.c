@@ -138,14 +138,11 @@ void kmain(void)
   uart_init(UART_BAUDRATE_115200);
   uart_print("uart initialized!\r\n");
 
-    << << << < HEAD
-    == == == =
-      if (boot_flags_valid() && (boot_flags.reset_reason == RESET_REASON_WATCHDOG)) {
+  if (boot_flags_valid() && (boot_flags.reset_reason == RESET_REASON_WATCHDOG)) {
     uart_print("*** previous reset caused by watchdog timeout ***\r\n");
-    }
+  }
 
-    >> >> >> > b209abc(watchdog impl)
-    scheduler_init(&clk_freq, hz, &tick_count);
+  scheduler_init(&clk_freq, hz, &tick_count);
 
   uart_task_start();
 
@@ -195,7 +192,7 @@ void kmain(void)
   queue_init(&test_queue, 4, sizeof(uint32_t));
   semaphore_init(&shared_semaphore, 1, 1);
   dfu_trigger_reset();
-  watchdog_init(5);
+  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 3);
   watchdog_task_start();
   __asm__ volatile ("cpsie i" ::: "memory");
 

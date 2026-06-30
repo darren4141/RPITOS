@@ -30,4 +30,6 @@ StatusCode scheduler_remove_from_blocked_list(TaskControlBlock *tcb);
 
 void startFirstTask(void);   // defined in startup.s
 
+void scheduler_change_task_priority(TaskControlBlock *tcb, TaskPriorityLevel new_priority);
+
 #endif

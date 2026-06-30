@@ -63,7 +63,9 @@ StatusCode task_create(TaskFunction_t taskFunction, uint16_t stack_depth, TaskPr
   (*p_task_control_block)->taskId = taskCounter;
   taskCounter++;
 
-  (*p_task_control_block)->priority = priority;
+  (*p_task_control_block)->priority      = priority;
+  (*p_task_control_block)->base_priority = priority;
+  (*p_task_control_block)->mutexes_held  = 0;
 
   (*p_task_control_block)->p_EndOfStack = (*p_task_control_block)->p_Stack + stack_depth - 1;
 

@@ -3,6 +3,7 @@
     "boot/bootstrap",
     "boot/bootloader",
     "rtos/full_demo",
-    "rtos/heavy_overlap"
+    "rtos/heavy_overlap",
+    "rtos/mutex_inheritance"
   ]
 }

@@ -69,7 +69,9 @@ StatusCode scheduler_init(volatile uint32_t *p_clk_freq, uint32_t new_hz, volati
   idle_tcb.p_TopOfStack = top;
   idle_tcb.stackDepth = IDLE_STACK_DEPTH;
   idle_tcb.taskId = 0xFFFFU;
-  idle_tcb.priority = TASK_PRIORITY_IDLE;
+  idle_tcb.priority      = TASK_PRIORITY_IDLE;
+  idle_tcb.base_priority = TASK_PRIORITY_IDLE;
+  idle_tcb.mutexes_held  = 0;
   idle_tcb.currentState = TASK_STATE_READY;
   idle_tcb.wakeup_time = 0U;
   idle_tcb.wakeup_reason = WAKEUP_REASON_NONE;
@@ -288,6 +290,47 @@ StatusCode scheduler_remove_from_blocked_list(TaskControlBlock *tcb)
   item->container = NULL;
 
   return E_OK;
+}
+
+// Moves tcb to a new priority level.  If the task is in a ready list (READY or
+// RUNNING state) it is relocated to the correct priority bucket.  If blocked,
+// only the priority field is updated; addToReadyList will use the new value
+// when the task is eventually unblocked.  Must be called inside a critical section.
+void scheduler_change_task_priority(TaskControlBlock *tcb, TaskPriorityLevel new_priority)
+{
+  TaskState saved_state = tcb->currentState;
+  int in_ready = (saved_state == TASK_STATE_READY || saved_state == TASK_STATE_RUNNING);
+
+  if (in_ready) {
+    ListItem *item = &tcb->state_list_item;
+    List *list = item->container;
+    if (list != NULL) {
+      if (item->prev != NULL) {
+        item->prev->next = item->next;
+      } else {
+        list->head = item->next;
+      }
+      if (item->next != NULL) {
+        item->next->prev = item->prev;
+      } else {
+        list->list_end = item->prev;
+      }
+      if (list->index == item) {
+        list->index = (item->next != NULL) ? item->next : list->head;
+      }
+      list->num_items--;
+      item->next = NULL;
+      item->prev = NULL;
+      item->container = NULL;
+    }
+  }
+
+  tcb->priority = new_priority;
+
+  if (in_ready) {
+    addToReadyList(&tcb);
+    tcb->currentState = saved_state;  // restore RUNNING if it was running when boosted
+  }
 }
 
 static void block_until(uint64_t wakeup_time)

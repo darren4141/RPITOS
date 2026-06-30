@@ -145,7 +145,7 @@ void kmain(void)
   scheduler_init(&clk_freq, hz, &tick_count);
 
   uart_task_start();
-  watchdog_init(5);
+  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 3);
 
   uart_print("Starting main...\r\n");
 

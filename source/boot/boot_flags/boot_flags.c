@@ -12,10 +12,14 @@ void boot_flags_init(void)
     // way, nothing else in this struct can be trusted either — reset to
     // safe defaults. The caller (bootloader_init()) re-derives fw_crc_ok
     // from scratch by checking eMMC directly.
-    boot_flags.reset_reason = RESET_REASON_COLD;
-    boot_flags.dfu_requested = 0;
-    boot_flags.fw_crc_ok = 0;
-    boot_flags.magic = BOOT_FLAGS_MAGIC;
+    boot_flags.reset_reason        = RESET_REASON_COLD;
+    boot_flags.dfu_requested       = 0U;
+    boot_flags.fw_crc_ok           = 0U;
+    boot_flags.wdt_reset_count     = 0U;
+    boot_flags.wdt_reset_tolerance = -1;
+    boot_flags.wdt_reset_policy    = 0U;
+    boot_flags.wdt_reset_reason    = 0U;
+    boot_flags.magic               = BOOT_FLAGS_MAGIC;
   }
   // else: magic survived, so we trust the rest of the struct survived with
   // it (single contiguous region) — leave dfu_requested/reset_reason/

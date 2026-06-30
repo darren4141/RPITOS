@@ -5,3 +5,6 @@ sudo umount /mnt/emmc
 
 # App image — write raw to sector 4096
 sudo dd if=kernel7l.img of=/dev/sdf bs=512 seek=4096 conv=notrunc status=progress
+
+# App image - erase
+sudo dd if=/dev/zero of=/dev/sdf bs=512 seek=4096 count=1 conv=fsync

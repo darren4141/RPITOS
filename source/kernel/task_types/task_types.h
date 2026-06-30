@@ -8,11 +8,11 @@
 
 typedef enum {
   TASK_PRIORITY_IDLE = 0,
-  TASK_PRIORITY_1 = 1,
-  TASK_PRIORITY_2 = 2,
-  TASK_PRIORITY_3 = 3,
-  TASK_PRIORITY_4 = 4,
-  TASK_PRIORITY_5 = 5,
+  TASK_PRIORITY_1    = 1,
+  TASK_PRIORITY_2    = 2,
+  TASK_PRIORITY_3    = 3,
+  TASK_PRIORITY_4    = 4,
+  TASK_PRIORITY_5    = 5,
   NUM_TASK_PRIORITIES
 } TaskPriorityLevel;
 
@@ -67,6 +67,9 @@ struct TaskControlBlock {
   ListItem event_list_item;
 
   volatile TaskWakeupReason wakeup_reason;
+
+  TaskPriorityLevel base_priority; // original priority, never mutated; used to restore after inheritance boost
+  uint32_t mutexes_held;           // count of inheritance-enabled mutexes currently held
 };
 
 #endif

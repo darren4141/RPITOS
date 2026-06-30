@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "boot_flags.h"
+
 #ifndef WATCHDOG_MINIMAL
 #include "scheduler.h"
 #include "task.h"
@@ -26,7 +28,7 @@ bool watchdog_was_wdt_reset(void)
   return (PM_RSTS & PM_RSTS_HADWRQ) != 0;
 }
 
-StatusCode watchdog_init(uint32_t timeout_s)
+StatusCode watchdog_init(uint32_t timeout_s, WatchdogResetPolicy policy, int32_t tolerance)
 {
   if (timeout_s == 0) {
     return E_INVALID_ARGS;
@@ -39,6 +41,9 @@ StatusCode watchdog_init(uint32_t timeout_s)
 
   PM_WDOG = PM_PASSWORD | s_timeout_ticks;
   PM_RSTC = PM_PASSWORD | PM_RSTC_WRCFG_FULL_RESET;
+
+  boot_flags.wdt_reset_policy    = (uint32_t)policy;
+  boot_flags.wdt_reset_tolerance = tolerance;
   return E_OK;
 }
 

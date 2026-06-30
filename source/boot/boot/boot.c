@@ -85,6 +85,7 @@ StatusCode boot_loadApp()
 
 void boot_jumpToApp()
 {
+  boot_flags.wdt_reset_count = 0U;
   uart_print( "boot: jumping to app\r\n" );
 
   // Wait for PL011 TX FIFO to drain before jumping — the app's uart_init()
