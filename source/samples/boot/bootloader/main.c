@@ -79,12 +79,12 @@ static void bootloader_init()
                 boot_flags.wdt_reset_tolerance,
                 boot_flags.wdt_reset_policy);
 
-    if (boot_flags.wdt_reset_tolerance >= 0 &&
-        (int32_t)boot_flags.wdt_reset_count > boot_flags.wdt_reset_tolerance) {
+    if ((boot_flags.wdt_reset_tolerance >= 0)
+        && ((int32_t)boot_flags.wdt_reset_count > boot_flags.wdt_reset_tolerance)) {
       if (boot_flags.wdt_reset_policy == (uint32_t)WATCHDOG_RESET_POLICY_FORCE_UPDATE) {
         uart_print("boot: tolerance exceeded, forcing DFU\r\n");
         boot_flags.dfu_requested = DFU_REQUEST;
-        boot_flags.reset_reason  = RESET_REASON_SOFTWARE;
+        boot_flags.reset_reason = RESET_REASON_SOFTWARE;
       }
     }
   }
@@ -154,7 +154,7 @@ static StatusCode bootloader_execute()
 void kmain(void)
 {
   bootloader_init();
-  bootloader_recovery_window();
+  // bootloader_recovery_window();
 
   for (uint32_t retries = NUM_RETRIES; retries > 0; retries--) {
     StatusCode ret = bootloader_execute();
