@@ -60,34 +60,14 @@ static void bootloader_init()
 {
   StatusCode status;
   uart_init(UART_BAUDRATE_115200);
-  uart_print("Bootloader start, initializing components\r\n");
+  uart_print("\r\n\n-------------------Bootloader start, initializing components-------------------\r\n");
   uart_print("uart initialized\r\n");
   jtag_gpio_init();
   uart_print("jtag initialized\r\n");
 
-  // Read PM_RSTS before boot_flags_init() — boot_flags_init() may clobber
-  // reset_reason with RESET_REASON_COLD if RAM didn't survive the reset.
-  // PM_RSTS is a sticky hardware register that survives all reset types.
-  bool wdt_reset = watchdog_was_wdt_reset();
 
   boot_flags_init();
-  if (wdt_reset) {
-    boot_flags.reset_reason = RESET_REASON_WATCHDOG;
-    boot_flags.wdt_reset_count++;
-    uart_printf("boot: *** WDT reset #%u (tolerance=%d, policy=%u) ***\r\n",
-                boot_flags.wdt_reset_count,
-                boot_flags.wdt_reset_tolerance,
-                boot_flags.wdt_reset_policy);
 
-    if ((boot_flags.wdt_reset_tolerance >= 0)
-        && ((int32_t)boot_flags.wdt_reset_count > boot_flags.wdt_reset_tolerance)) {
-      if (boot_flags.wdt_reset_policy == (uint32_t)WATCHDOG_RESET_POLICY_FORCE_UPDATE) {
-        uart_print("boot: tolerance exceeded, forcing DFU\r\n");
-        boot_flags.dfu_requested = DFU_REQUEST;
-        boot_flags.reset_reason = RESET_REASON_SOFTWARE;
-      }
-    }
-  }
   uart_print("boot flags initialized\r\n");
 
   status = emmc_init();
@@ -102,6 +82,10 @@ static void bootloader_init()
   uart_print("boot module initialized\r\n");
   STATUS_OK_OR_WARN(dfu_init());
   uart_print("dfu module initialized\r\n");
+  uart_print("-------------------Done initializing components-------------------\r\n\n\n");
+
+  STATUS_OK_OR_WARN(wdt_meta_read());
+  uart_print("wdt meta loaded\r\n");
 
   if (boot_flags.reset_reason == RESET_REASON_COLD) {
     boot_flags.fw_crc_ok = (boot_validateApp() == E_OK) ? 1U : 0U;
@@ -110,19 +94,39 @@ static void bootloader_init()
   else {
     uart_print("warm boot: trusting preserved boot flags\r\n");
   }
+
+  wdt_meta.wdt_reset_count++;
+  uart_printf("boot: WDT reset #%u (tolerance=%d, policy=%u)\r\n",
+              wdt_meta.wdt_reset_count,
+              wdt_meta.wdt_reset_tolerance,
+              wdt_meta.wdt_reset_policy);
+
+  if ((wdt_meta.wdt_reset_tolerance >= 0)
+      && ((int32_t)wdt_meta.wdt_reset_count > wdt_meta.wdt_reset_tolerance)) {
+    if (wdt_meta.wdt_reset_policy == (uint32_t)WATCHDOG_RESET_POLICY_FORCE_UPDATE) {
+      uart_print("boot: tolerance exceeded, forcing DFU\r\n");
+      wdt_meta.wdt_reset_count = 0U;
+      boot_flags.dfu_requested = DFU_REQUEST;
+      boot_flags.reset_reason = RESET_REASON_SOFTWARE;
+    }
+  }
+
+  STATUS_OK_OR_WARN(wdt_meta_write());
 }
 
 static StatusCode bootloader_execute()
 {
   StatusCode ret;
 
-  uart_print("Bootloader executing...\r\n");
+  uart_print("\r\n\n-------------------Bootloader executing-------------------\r\n");
 
   if (boot_flags.dfu_requested == DFU_REQUEST) {
     uart_print("DFU requested! entering DFU recv loop...\r\n");
     if (dfu_receive() != E_OK) {
       return E_ABORTED;
     }
+    wdt_meta.wdt_reset_count = 0U;
+    STATUS_OK_OR_WARN(wdt_meta_write());
     ret = boot_loadApp();
     if (ret != E_OK) {
       return ret;
@@ -142,6 +146,8 @@ static StatusCode bootloader_execute()
     if (dfu_receive() != E_OK) {
       return E_ABORTED;
     }
+    wdt_meta.wdt_reset_count = 0U;
+    STATUS_OK_OR_WARN(wdt_meta_write());
     ret = boot_loadApp();
     if (ret != E_OK) {
       return ret;
@@ -167,6 +173,8 @@ void kmain(void)
     StatusCode ret = boot_validateApp();
     if (ret == E_OK) {
       boot_flags.fw_crc_ok = 1;
+      wdt_meta.wdt_reset_count = 0U;
+      STATUS_OK_OR_WARN(wdt_meta_write());
       boot_loadApp();
       boot_jumpToApp();
     }

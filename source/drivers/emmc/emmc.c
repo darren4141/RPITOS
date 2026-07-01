@@ -4,6 +4,7 @@
 
 static uint32_t ulRCA = 1;
 static int xIsHC = 1;   // CM4 eMMC is always high-capacity (sector addressing)
+static int s_emmc_initialized = 0;
 
 #define EMMC2_BASE_CLOCK 200000000U
 
@@ -141,6 +142,17 @@ static StatusCode emmc_set_clock(uint32_t ulHz)
 
 StatusCode emmc_init(void)
 {
+  if (s_emmc_initialized) {
+    return E_OK;
+  }
+
+  // If a previous boot stage already initialized the controller, the SD clock
+  // will be enabled and stable. Skip re-init to avoid disrupting an active card.
+  if ((pxEMMC->CONTROL1 & (CTRL1_CLK_EN | CTRL1_CLK_STABLE)) == (CTRL1_CLK_EN | CTRL1_CLK_STABLE)) {
+    s_emmc_initialized = 1;
+    return E_OK;
+  }
+
   uart_print("emmc: init\r\n");
 
   // Reset host + CMD + DATA circuits
@@ -220,6 +232,7 @@ StatusCode emmc_init(void)
     return E_TIMED_OUT;
   }
 
+  s_emmc_initialized = 1;
   return E_OK;
 }
 

@@ -28,6 +28,26 @@ typedef enum {
   WATCHDOG_RESET_REASON_COUNT_EXCEEDED = 1,
 } WatchdogResetReason;
 
+// ── WDT persistent metadata (lives in eMMC EMMC_SECTOR_METADATA) ─────────────
+
+#define WDT_META_MAGIC 0xB007DA7AU
+
+typedef struct {
+  uint32_t magic;
+  uint32_t wdt_reset_count;
+  int32_t  wdt_reset_tolerance;
+  uint32_t wdt_reset_policy;
+  uint32_t wdt_reset_reason;
+} WdtMeta;
+
+// In-RAM shadow. Call wdt_meta_read() to populate, wdt_meta_write() to persist.
+extern WdtMeta wdt_meta;
+
+StatusCode wdt_meta_read(void);
+StatusCode wdt_meta_write(void);
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Returns true if the previous boot was caused by a watchdog timeout.
 // Call before watchdog_init() — writing PM_RSTC on init may clear the
 // sticky bits in PM_RSTS.

@@ -78,8 +78,11 @@ static void spin_ms(uint32_t ms)
 void dfu_trigger_task(void *params)
 {
   (void)params;
+  uart_print("Safety window\r\n");
   while (1) {
+    uart_print(".");
     if (dfu_pending) {
+      uart_print(".\r\n");
       uart_print("DFU trigger received, rebooting to bootloader\r\n");
       __asm__ volatile ("cpsid i" ::: "memory");
       boot_flags.dfu_requested = DFU_REQUEST;
@@ -96,6 +99,8 @@ void dfu_trigger_task(void *params)
 void low_task(void *params)
 {
   (void)params;
+  task_delay_ms(2000);
+
   while (1) {
     uart_printf("[%5u] LOW : acquiring mutex\r\n",
                 (uint32_t)scheduler_get_tick_count());
@@ -141,6 +146,8 @@ void low_task(void *params)
 // boosted above MID.
 void mid_task(void *params)
 {
+  task_delay_ms(2000);
+
   (void)params;
   uint32_t count = 0;
   while (1) {
@@ -158,6 +165,7 @@ void high_task(void *params)
   (void)params;
   uint32_t round = 0;
 
+  task_delay_ms(2000);
   task_delay_ms(100);   // let LOW acquire the mutex first
 
   while (1) {
@@ -194,7 +202,7 @@ void kmain(void)
 
   scheduler_init(&clk_freq, hz, &tick_count);
   uart_task_start();
-  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 1);
+  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
 
   mutex_init(&shared_mtx);
   mutex_set_inheritance(&shared_mtx, 1);   // set to 0 to see uninherited inversion

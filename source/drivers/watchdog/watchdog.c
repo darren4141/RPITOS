@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "boot_flags.h"
+#include "emmc.h"
 
 #ifndef WATCHDOG_MINIMAL
 #include "scheduler.h"
@@ -22,6 +22,63 @@
 #define PM_WDOG_MAX_TIMEOUT 15UL          // floor(0xFFFFF / 65536)
 
 static uint32_t s_timeout_ticks;
+
+// ── WDT persistent metadata ───────────────────────────────────────────────────
+
+WdtMeta wdt_meta = {
+  .magic = 0U,
+  .wdt_reset_count = 0U,
+  .wdt_reset_tolerance = -1,
+  .wdt_reset_policy = 0U,
+  .wdt_reset_reason = 0U,
+};
+
+static uint8_t s_sector_buf[SECTOR_SIZE];
+
+StatusCode wdt_meta_read(void)
+{
+  StatusCode ret = emmc_read_blocks(EMMC_SECTOR_METADATA, s_sector_buf, 1U);
+  if (ret != E_OK) {
+    return ret;
+  }
+
+  const WdtMeta *src = (const WdtMeta *)s_sector_buf;
+
+  if (src->magic != WDT_META_MAGIC) {
+    wdt_meta.magic = WDT_META_MAGIC;
+    wdt_meta.wdt_reset_count = 0U;
+    wdt_meta.wdt_reset_tolerance = -1;
+    wdt_meta.wdt_reset_policy = 0U;
+    wdt_meta.wdt_reset_reason = 0U;
+  }
+  else {
+    wdt_meta.magic = src->magic;
+    wdt_meta.wdt_reset_count = src->wdt_reset_count;
+    wdt_meta.wdt_reset_tolerance = src->wdt_reset_tolerance;
+    wdt_meta.wdt_reset_policy = src->wdt_reset_policy;
+    wdt_meta.wdt_reset_reason = src->wdt_reset_reason;
+  }
+
+  return E_OK;
+}
+
+StatusCode wdt_meta_write(void)
+{
+  for (uint32_t i = 0U; i < SECTOR_SIZE; i++) {
+    s_sector_buf[i] = 0U;
+  }
+
+  WdtMeta *dst = (WdtMeta *)s_sector_buf;
+  dst->magic = wdt_meta.magic;
+  dst->wdt_reset_count = wdt_meta.wdt_reset_count;
+  dst->wdt_reset_tolerance = wdt_meta.wdt_reset_tolerance;
+  dst->wdt_reset_policy = wdt_meta.wdt_reset_policy;
+  dst->wdt_reset_reason = wdt_meta.wdt_reset_reason;
+
+  return emmc_write_blocks(EMMC_SECTOR_METADATA, s_sector_buf, 1U);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 bool watchdog_was_wdt_reset(void)
 {
@@ -42,8 +99,13 @@ StatusCode watchdog_init(uint32_t timeout_s, WatchdogResetPolicy policy, int32_t
   PM_WDOG = PM_PASSWORD | s_timeout_ticks;
   PM_RSTC = PM_PASSWORD | PM_RSTC_WRCFG_FULL_RESET;
 
-  boot_flags.wdt_reset_policy    = (uint32_t)policy;
-  boot_flags.wdt_reset_tolerance = tolerance;
+  emmc_init();   // idempotent — no-op if already initialized
+  if (wdt_meta_read() == E_OK) {
+    wdt_meta.wdt_reset_tolerance = tolerance;
+    wdt_meta.wdt_reset_policy = (uint32_t)policy;
+    wdt_meta_write();
+  }
+
   return E_OK;
 }
 

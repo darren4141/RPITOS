@@ -1,4 +1,4 @@
-SAMPLE_DRIVERS         := gpio uart gentimer gic jtag reset interrupts watchdog
+SAMPLE_DRIVERS         := gpio uart gentimer gic jtag reset interrupts watchdog emmc
 SAMPLE_KERNEL          := scheduler task mutex semaphore heap
 SAMPLE_BOOT_COMPONENTS := dfu_trigger boot_flags
 SAMPLE_LIBS            :=
