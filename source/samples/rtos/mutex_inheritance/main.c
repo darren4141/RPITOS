@@ -52,8 +52,8 @@
 
 #include <stdint.h>
 
-#define HOLD_MS  300u     // how long LOW holds the mutex (busy work)
-#define PRINT_MS 50u      // how often LOW prints its priority during the hold
+#define HOLD_MS  300U     // how long LOW holds the mutex (busy work)
+#define PRINT_MS 50U      // how often LOW prints its priority during the hold
 
 static Mutex shared_mtx;
 
@@ -65,15 +65,6 @@ static TaskControlBlock *tcb_low = NULL;
 static TaskControlBlock *tcb_mid = NULL;
 static TaskControlBlock *tcb_high = NULL;
 static TaskControlBlock *tcb_dfu = NULL;
-
-// Busy-spin for `ms` milliseconds.
-// Keeps the calling task READY/RUNNING so the scheduler sees its priority on
-// every tick — this is what makes the inheritance boost visible.
-static void spin_ms(uint32_t ms)
-{
-  uint64_t deadline = scheduler_get_tick_count() + ms;
-  while (scheduler_get_tick_count() < deadline) {}
-}
 
 void dfu_trigger_task(void *params)
 {
@@ -202,15 +193,16 @@ void kmain(void)
 
   scheduler_init(&clk_freq, hz, &tick_count);
   uart_task_start();
-  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
 
   mutex_init(&shared_mtx);
-  mutex_set_inheritance(&shared_mtx, 1);   // set to 0 to see uninherited inversion
+  mutex_set_inheritance(&shared_mtx, 0);   // set to 0 to see uninherited inversion
 
   task_create(low_task, 2048, TASK_PRIORITY_1, NULL, &tcb_low);
-  task_create(mid_task, 2048, TASK_PRIORITY_2, NULL, &tcb_mid);
-  task_create(high_task, 2048, TASK_PRIORITY_3, NULL, &tcb_high);
+  // task_create(mid_task, 2048, TASK_PRIORITY_2, NULL, &tcb_mid);
+  // task_create(high_task, 2048, TASK_PRIORITY_3, NULL, &tcb_high);
   task_create(dfu_trigger_task, 1024, TASK_PRIORITY_5, NULL, &tcb_dfu);
+
+  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
   watchdog_task_start();
 
   gic_init();

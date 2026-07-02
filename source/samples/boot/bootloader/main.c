@@ -84,6 +84,9 @@ static void bootloader_init()
   uart_print("dfu module initialized\r\n");
   uart_print("-------------------Done initializing components-------------------\r\n\n\n");
 
+
+  uart_print("\r\n\n-------------------Checking boot flags and WDG metadata-------------------\r\n");
+
   STATUS_OK_OR_WARN(wdt_meta_read());
   uart_print("wdt meta loaded\r\n");
 
@@ -107,11 +110,31 @@ static void bootloader_init()
       uart_print("boot: tolerance exceeded, forcing DFU\r\n");
       wdt_meta.wdt_reset_count = 0U;
       boot_flags.dfu_requested = DFU_REQUEST;
+      boot_flags.fw_crc_ok = 0;
       boot_flags.reset_reason = RESET_REASON_SOFTWARE;
+
+      // Clear the app header's CRC on eMMC so a subsequent cold boot (without
+      // preserved boot_flags) also fails validation and cannot jump to the
+      // stale app until new firmware is DFU'd in.
+      uint8_t header_buf[SECTOR_SIZE] __attribute__((aligned(4)));
+      if (emmc_read_blocks(EMMC_SECTOR_APP, header_buf, 1U) == E_OK) {
+        StartPacket *hdr = (StartPacket *)header_buf;
+        hdr->crc = 0U;
+        if (emmc_write_blocks(EMMC_SECTOR_APP, header_buf, 1U) != E_OK) {
+          uart_print("boot: failed to clear app header CRC on eMMC\r\n");
+        }
+        else {
+          uart_print("boot: app header CRC cleared on eMMC\r\n");
+        }
+      }
+      else {
+        uart_print("boot: failed to read app header for CRC clear\r\n");
+      }
     }
   }
 
   STATUS_OK_OR_WARN(wdt_meta_write());
+  uart_print("-------------------Done checking metadata-------------------\r\n");
 }
 
 static StatusCode bootloader_execute()

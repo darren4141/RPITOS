@@ -46,6 +46,23 @@ SECTIONS {
 		_shared_flags_end = .;
 	}
 
+	/* DWARF debug info — address 0, not loaded, kept only for gdb to read
+	   from the .elf. Without these explicit rules, /DISCARD/ below silently
+	   throws them away (they're not linker-generated like .symtab/.strtab),
+	   which is why file:line breakpoints and source-level stepping stop
+	   working even though -g is passed at compile time. */
+	.debug_info     0 : { *(.debug_info) }
+	.debug_abbrev   0 : { *(.debug_abbrev) }
+	.debug_line     0 : { *(.debug_line) }
+	.debug_str      0 : { *(.debug_str) }
+	.debug_loc      0 : { *(.debug_loc) }
+	.debug_loclists 0 : { *(.debug_loclists) }
+	.debug_ranges   0 : { *(.debug_ranges) }
+	.debug_rnglists 0 : { *(.debug_rnglists) }
+	.debug_aranges  0 : { *(.debug_aranges) }
+	.debug_frame    0 : { *(.debug_frame) }
+	.comment        0 : { *(.comment) }
+
 	/DISCARD/ : {
 		*(*)
 	}
