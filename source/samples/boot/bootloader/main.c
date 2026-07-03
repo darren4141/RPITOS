@@ -185,6 +185,8 @@ void kmain(void)
   bootloader_init();
   // bootloader_recovery_window();
 
+  boot_flags.dfu_requested = DFU_REQUEST;
+
   for (uint32_t retries = NUM_RETRIES; retries > 0; retries--) {
     StatusCode ret = bootloader_execute();
     uart_printf("boot: attempt failed (%d), %u retries left\r\n", ret, retries - 1);

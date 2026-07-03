@@ -69,9 +69,9 @@ StatusCode scheduler_init(volatile uint32_t *p_clk_freq, uint32_t new_hz, volati
   idle_tcb.p_TopOfStack = top;
   idle_tcb.stackDepth = IDLE_STACK_DEPTH;
   idle_tcb.taskId = 0xFFFFU;
-  idle_tcb.priority      = TASK_PRIORITY_IDLE;
+  idle_tcb.priority = TASK_PRIORITY_IDLE;
   idle_tcb.base_priority = TASK_PRIORITY_IDLE;
-  idle_tcb.mutexes_held  = 0;
+  idle_tcb.mutexes_held = 0;
   idle_tcb.currentState = TASK_STATE_READY;
   idle_tcb.wakeup_time = 0U;
   idle_tcb.wakeup_reason = WAKEUP_REASON_NONE;
@@ -299,7 +299,7 @@ StatusCode scheduler_remove_from_blocked_list(TaskControlBlock *tcb)
 void scheduler_change_task_priority(TaskControlBlock *tcb, TaskPriorityLevel new_priority)
 {
   TaskState saved_state = tcb->currentState;
-  int in_ready = (saved_state == TASK_STATE_READY || saved_state == TASK_STATE_RUNNING);
+  int in_ready = ((saved_state == TASK_STATE_READY) || (saved_state == TASK_STATE_RUNNING));
 
   if (in_ready) {
     ListItem *item = &tcb->state_list_item;
@@ -307,12 +307,14 @@ void scheduler_change_task_priority(TaskControlBlock *tcb, TaskPriorityLevel new
     if (list != NULL) {
       if (item->prev != NULL) {
         item->prev->next = item->next;
-      } else {
+      }
+      else {
         list->head = item->next;
       }
       if (item->next != NULL) {
         item->next->prev = item->prev;
-      } else {
+      }
+      else {
         list->list_end = item->prev;
       }
       if (list->index == item) {
@@ -329,7 +331,7 @@ void scheduler_change_task_priority(TaskControlBlock *tcb, TaskPriorityLevel new
 
   if (in_ready) {
     addToReadyList(&tcb);
-    tcb->currentState = saved_state;  // restore RUNNING if it was running when boosted
+    tcb->currentState = saved_state;   // restore RUNNING if it was running when boosted
   }
 }
 
@@ -372,16 +374,16 @@ void __attribute__((noinline)) timer_tick_handler(void)
     }
   }
 
-  // Read current CVAL and advance by one interval
+  // Rearm relative to the current physical counter (CNTPCT) in case any systicks got skipped
   uint32_t lo, hi;
-  __asm__ volatile ("mrrc p15, 2, %0, %1, c14" : "=r" (lo), "=r" (hi));         // CNTP_CVAL read
+  __asm__ volatile ("mrrc p15, 0, %0, %1, c14" : "=r" (lo), "=r" (hi));         // CNTPCT read
 
-  uint64_t cval = ((uint64_t)hi << 32) | lo;
-  cval += (*s_clk_freq / hz);                                                   // advance by one interval
+  uint64_t cntpct = ((uint64_t)hi << 32) | lo;
+  uint64_t cval = cntpct + (*s_clk_freq / hz);
 
   uint32_t new_lo = (uint32_t)(cval & 0xFFFFFFFF);
   uint32_t new_hi = (uint32_t)(cval >> 32);
-  __asm__ volatile ("mcrr p15, 2, %0, %1, c14" : : "r" (new_lo), "r" (new_hi)); // CNTP_CVAL write
+  __asm__ volatile ("mcrr p15, 2, %0, %1, c14" : : "r" (new_lo), "r" (new_hi));   // CNTP_CVAL write
 
   (*s_tick_count)++;
 

@@ -202,8 +202,8 @@ void kmain(void)
   // task_create(high_task, 2048, TASK_PRIORITY_3, NULL, &tcb_high);
   task_create(dfu_trigger_task, 1024, TASK_PRIORITY_5, NULL, &tcb_dfu);
 
-  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
-  watchdog_task_start();
+  // watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
+  // watchdog_task_start();
 
   gic_init();
   gentimer_init(&clk_freq, hz);
