@@ -52,7 +52,7 @@
 
 #include <stdint.h>
 
-#define HOLD_MS  300U     // how long LOW holds the mutex (busy work)
+#define HOLD_MS  2000U    // how long LOW holds the mutex (busy work)
 #define PRINT_MS 50U      // how often LOW prints its priority during the hold
 
 static Mutex shared_mtx;
@@ -188,7 +188,7 @@ void kmain(void)
   uart_task_start();
 
   mutex_init(&shared_mtx);
-  mutex_set_inheritance(&shared_mtx, 0);   // set to 0 to see uninherited inversion
+  mutex_set_inheritance(&shared_mtx, 1);   // set to 0 to see uninherited inversion
 
   task_create(low_task, 4096, TASK_PRIORITY_1, NULL, &tcb_low);
   task_create(mid_task, 2048, TASK_PRIORITY_2, NULL, &tcb_mid);

@@ -54,26 +54,20 @@ void low_task(void *params)
 
 
   while (1) {
-    for (int i = 0; i < 1000; i++) {
-      uart_printf("[%5u] LOW\r\n",
-                  i);
+    uint64_t start = scheduler_get_tick_count();
+    uint64_t deadline = start + HOLD_MS;
+    uint64_t next_print = start + PRINT_MS;
+
+    while (scheduler_get_tick_count() < deadline) {
+      if (scheduler_get_tick_count() >= next_print) {
+        counter++;
+        uart_printf("[%5u] LOW\r\n",
+                    counter);
+        next_print += PRINT_MS;
+      }
     }
 
-
-    // uint64_t start = scheduler_get_tick_count();
-    // uint64_t deadline = start + HOLD_MS;
-    // uint64_t next_print = start + PRINT_MS;
-
-    // while (scheduler_get_tick_count() < deadline) {
-    // if (scheduler_get_tick_count() >= next_print) {
-    // counter++;
-    // uart_printf("[%5u] LOW\r\n",
-    // counter);
-    // next_print += PRINT_MS;
-    // }
-    // }
-
-    // counter = 0;
+    counter = 0;
 
     task_delay_ms(10U);
   }
@@ -105,9 +99,8 @@ void high_task(void *params)
 
   while (1) {
     round++;
-    uart_printf("[%5u] HIGH: [round %u] blocking on mutex"
-                " — LOW should be boosted to priority 3 now\r\n",
-                (uint32_t)scheduler_get_tick_count(), round);
+    uart_printf("[%5u] HIGH\r\n",
+                (uint32_t)scheduler_get_tick_count());
 
     task_delay_ms(1300);
   }
@@ -131,12 +124,12 @@ void kmain(void)
   uart_task_start();
 
   task_create(low_task, 2048, TASK_PRIORITY_1, NULL, &tcb_low);
-  // task_create(mid_task, 2048, TASK_PRIORITY_2, NULL, &tcb_mid);
-  // task_create(high_task, 2048, TASK_PRIORITY_3, NULL, &tcb_high);
+  task_create(mid_task, 2048, TASK_PRIORITY_2, NULL, &tcb_mid);
+  task_create(high_task, 2048, TASK_PRIORITY_3, NULL, &tcb_high);
   task_create(dfu_trigger_task, 1024, TASK_PRIORITY_4, NULL, &tcb_dfu);
 
-  // watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
-  // watchdog_task_start();
+  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
+  watchdog_task_start();
 
   gic_init();
   gentimer_init(&clk_freq, hz);
