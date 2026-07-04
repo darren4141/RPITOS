@@ -59,6 +59,7 @@ StatusCode scheduler_init(volatile uint32_t *p_clk_freq, uint32_t new_hz, volati
   StackType_t *top = &idle_stack[IDLE_STACK_DEPTH - 1];
   *top-- = 0x00000013U;                     // SPSR: SVC mode, IRQs enabled
   *top-- = (StackType_t)idle_task_func;     // PC
+  *top-- = 0U;                              // LR — frame is [r0-r12][lr][pc][spsr]; idle never returns
   for (int i = 12; i >= 1; i--) {
     *top-- = 0U;                            // R12–R1
   }

@@ -69,9 +69,7 @@ static TaskControlBlock *tcb_dfu = NULL;
 void dfu_trigger_task(void *params)
 {
   (void)params;
-  uart_print("Safety window\r\n");
   while (1) {
-    uart_print(".");
     if (dfu_pending) {
       uart_print(".\r\n");
       uart_print("DFU trigger received, rebooting to bootloader\r\n");
@@ -90,8 +88,6 @@ void dfu_trigger_task(void *params)
 void low_task(void *params)
 {
   (void)params;
-  task_delay_ms(2000);
-
   while (1) {
     uart_printf("[%5u] LOW : acquiring mutex\r\n",
                 (uint32_t)scheduler_get_tick_count());
@@ -137,8 +133,6 @@ void low_task(void *params)
 // boosted above MID.
 void mid_task(void *params)
 {
-  task_delay_ms(2000);
-
   (void)params;
   uint32_t count = 0;
   while (1) {
@@ -156,7 +150,6 @@ void high_task(void *params)
   (void)params;
   uint32_t round = 0;
 
-  task_delay_ms(2000);
   task_delay_ms(100);   // let LOW acquire the mutex first
 
   while (1) {
@@ -197,13 +190,13 @@ void kmain(void)
   mutex_init(&shared_mtx);
   mutex_set_inheritance(&shared_mtx, 0);   // set to 0 to see uninherited inversion
 
-  task_create(low_task, 2048, TASK_PRIORITY_1, NULL, &tcb_low);
-  // task_create(mid_task, 2048, TASK_PRIORITY_2, NULL, &tcb_mid);
-  // task_create(high_task, 2048, TASK_PRIORITY_3, NULL, &tcb_high);
-  task_create(dfu_trigger_task, 1024, TASK_PRIORITY_5, NULL, &tcb_dfu);
+  task_create(low_task, 4096, TASK_PRIORITY_1, NULL, &tcb_low);
+  task_create(mid_task, 2048, TASK_PRIORITY_2, NULL, &tcb_mid);
+  task_create(high_task, 2048, TASK_PRIORITY_3, NULL, &tcb_high);
+  task_create(dfu_trigger_task, 2048, TASK_PRIORITY_5, NULL, &tcb_dfu);
 
-  // watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
-  // watchdog_task_start();
+  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
+  watchdog_task_start();
 
   gic_init();
   gentimer_init(&clk_freq, hz);

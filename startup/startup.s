@@ -119,7 +119,14 @@ _irq_handler:
     srsdb sp!, #0x13             @ sp_svc -= 8; [sp_svc] = lr_irq, [sp_svc+4] = SPSR_irq
 
     cps  #0x13                   @ switch to SVC mode (sp = sp_svc = task's own stack)
-    push {r0-r12}                @ save r0–r12 on task's SVC stack
+    push {r0-r12, lr}            @ save r0–r12 AND lr_svc on task's SVC stack.
+                                 @ lr_svc is live task state: GCC uses lr as the
+                                 @ return address in leaf functions (bx lr) and as
+                                 @ a scratch register elsewhere. If it isn't part
+                                 @ of the context frame, the next task resumes
+                                 @ with the previous task's lr — a leaf-function
+                                 @ return then jumps into data (e.g. another
+                                 @ task's stack) and traps as Undefined.
 
 
     ldr r0, =0xFF842000     @ GICC base addr
@@ -165,7 +172,7 @@ irq_eoi$:
     str  r4, [r0, #0x10]         @ GICC_EOIR — end of interrupt
 
 irq_done$:
-    pop  {r0-r12}
+    pop  {r0-r12, lr}            @ restore r0–r12 and the task's own lr_svc
     rfeia sp!
 
 
@@ -179,5 +186,5 @@ startFirstTask:
     ldr     r1, [r0]                @ R1 = first TCB
     ldr     sp, [r1, #0]            @ SP = pxTopOfStack
 
-    pop     {r0-r12}
+    pop     {r0-r12, lr}        @ frame layout: [r0-r12][lr][pc][spsr]
     rfeia   sp!
