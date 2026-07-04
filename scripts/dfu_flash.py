@@ -7,11 +7,13 @@ as a serial terminal so you can watch the CM4 boot output.
 Usage:
     python dfu_flash.py <port> [image] [--baud BAUD]   # flash then terminal
     python dfu_flash.py <port> --terminal               # terminal only
+    python dfu_flash.py <port> [image] --flash-only     # flash then exit (no terminal)
 
 Examples:
     python dfu_flash.py COM3
     python dfu_flash.py COM3 kernel7l.img --baud 115200
     python dfu_flash.py COM3 --terminal
+    python dfu_flash.py COM3 kernel7l.img --flash-only
 
 Requires: pip install pyserial
 Exit terminal: Ctrl+C
@@ -30,6 +32,13 @@ try:
 except ImportError:
     print("Error: pyserial not installed.  Run: pip install pyserial")
     sys.exit(1)
+
+# stdout/stderr default to the system codepage (e.g. cp1252) when redirected to
+# a file or pipe on Windows, which can't encode the unicode characters used in
+# progress output below (e.g. u2713 checkmark) — force utf-8 either way.
+for _stream in (sys.stdout, sys.stderr):
+    if _stream.encoding.lower() != "utf-8":
+        _stream.reconfigure(encoding="utf-8")
 
 # Packet framing
 PACKET_SOF = 0xAA
@@ -366,6 +375,9 @@ def main() -> None:
                         help="Skip flashing and go straight to terminal mode")
     parser.add_argument("--self-update", action="store_true",
                         help="Flash into the bootloader slot (CMD_START_SELF_UPDATE)")
+    parser.add_argument("--flash-only", action="store_true",
+                        help="Exit immediately after flashing instead of entering the terminal "
+                             "(non-zero exit code on failure) — for scripted/debugger use")
     args = parser.parse_args()
 
     print(f"Port  : {args.port} @ {args.baud} baud")
@@ -375,6 +387,8 @@ def main() -> None:
 
         if not args.terminal:
             ok = flash(ser, args.image, self_update=args.self_update)
+            if args.flash_only:
+                sys.exit(0 if ok else 1)
             if not ok:
                 print("Flash failed — dropping into terminal anyway.")
             print()

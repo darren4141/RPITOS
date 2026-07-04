@@ -69,7 +69,7 @@ StatusCode boot_loadApp()
   emmc_read_blocks(EMMC_SECTOR_APP + 1, (void *)APP_START_ADDR, ulSectors);
 
   uart_print("App hex dump (4 bytes = 1 ARM instruction):\r\n");
-  for (uint32_t i = 0; i < 64; i += 4) {
+  for (uint32_t i = 0; i < 4; i += 4) {
     uart_printf("  %05x: %02X %02X %02X %02X\r\n",
                 APP_START_ADDR + i,
                 ((unsigned char *)APP_START_ADDR)[i + 0],

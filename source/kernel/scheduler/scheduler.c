@@ -59,6 +59,7 @@ StatusCode scheduler_init(volatile uint32_t *p_clk_freq, uint32_t new_hz, volati
   StackType_t *top = &idle_stack[IDLE_STACK_DEPTH - 1];
   *top-- = 0x00000013U;                     // SPSR: SVC mode, IRQs enabled
   *top-- = (StackType_t)idle_task_func;     // PC
+  *top-- = 0U;                              // LR — frame is [r0-r12][lr][pc][spsr]; idle never returns
   for (int i = 12; i >= 1; i--) {
     *top-- = 0U;                            // R12–R1
   }
@@ -70,6 +71,8 @@ StatusCode scheduler_init(volatile uint32_t *p_clk_freq, uint32_t new_hz, volati
   idle_tcb.stackDepth = IDLE_STACK_DEPTH;
   idle_tcb.taskId = 0xFFFFU;
   idle_tcb.priority = TASK_PRIORITY_IDLE;
+  idle_tcb.base_priority = TASK_PRIORITY_IDLE;
+  idle_tcb.mutexes_held = 0;
   idle_tcb.currentState = TASK_STATE_READY;
   idle_tcb.wakeup_time = 0U;
   idle_tcb.wakeup_reason = WAKEUP_REASON_NONE;
@@ -290,6 +293,49 @@ StatusCode scheduler_remove_from_blocked_list(TaskControlBlock *tcb)
   return E_OK;
 }
 
+// Moves tcb to a new priority level.  If the task is in a ready list (READY or
+// RUNNING state) it is relocated to the correct priority bucket.  If blocked,
+// only the priority field is updated; addToReadyList will use the new value
+// when the task is eventually unblocked.  Must be called inside a critical section.
+void scheduler_change_task_priority(TaskControlBlock *tcb, TaskPriorityLevel new_priority)
+{
+  TaskState saved_state = tcb->currentState;
+  int in_ready = ((saved_state == TASK_STATE_READY) || (saved_state == TASK_STATE_RUNNING));
+
+  if (in_ready) {
+    ListItem *item = &tcb->state_list_item;
+    List *list = item->container;
+    if (list != NULL) {
+      if (item->prev != NULL) {
+        item->prev->next = item->next;
+      }
+      else {
+        list->head = item->next;
+      }
+      if (item->next != NULL) {
+        item->next->prev = item->prev;
+      }
+      else {
+        list->list_end = item->prev;
+      }
+      if (list->index == item) {
+        list->index = (item->next != NULL) ? item->next : list->head;
+      }
+      list->num_items--;
+      item->next = NULL;
+      item->prev = NULL;
+      item->container = NULL;
+    }
+  }
+
+  tcb->priority = new_priority;
+
+  if (in_ready) {
+    addToReadyList(&tcb);
+    tcb->currentState = saved_state;   // restore RUNNING if it was running when boosted
+  }
+}
+
 static void block_until(uint64_t wakeup_time)
 {
   volatile TaskControlBlock *my_tcb = p_task_control_block;
@@ -329,16 +375,16 @@ void __attribute__((noinline)) timer_tick_handler(void)
     }
   }
 
-  // Read current CVAL and advance by one interval
+  // Rearm relative to the current physical counter (CNTPCT) in case any systicks got skipped
   uint32_t lo, hi;
-  __asm__ volatile ("mrrc p15, 2, %0, %1, c14" : "=r" (lo), "=r" (hi));         // CNTP_CVAL read
+  __asm__ volatile ("mrrc p15, 0, %0, %1, c14" : "=r" (lo), "=r" (hi));         // CNTPCT read
 
-  uint64_t cval = ((uint64_t)hi << 32) | lo;
-  cval += (*s_clk_freq / hz);                                                   // advance by one interval
+  uint64_t cntpct = ((uint64_t)hi << 32) | lo;
+  uint64_t cval = cntpct + (*s_clk_freq / hz);
 
   uint32_t new_lo = (uint32_t)(cval & 0xFFFFFFFF);
   uint32_t new_hi = (uint32_t)(cval >> 32);
-  __asm__ volatile ("mcrr p15, 2, %0, %1, c14" : : "r" (new_lo), "r" (new_hi)); // CNTP_CVAL write
+  __asm__ volatile ("mcrr p15, 2, %0, %1, c14" : : "r" (new_lo), "r" (new_hi));   // CNTP_CVAL write
 
   (*s_tick_count)++;
 

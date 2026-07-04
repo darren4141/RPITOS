@@ -20,7 +20,6 @@ SECTIONS {
 		*(.data)
 	}
 
-	/* Zero-initialised globals. Startup code zeroes this region before calling kmain */
 	.bss : {
 		. = ALIGN(4);
 		_bss_start = .;
@@ -29,7 +28,6 @@ SECTIONS {
 		_bss_end = .;
 	}
 
-	/* Space for stacks */
 	.stacks (NOLOAD) : {
 		. = ALIGN(8);
 		_fiq_stack_bottom = .;  . += 0x200;  _fiq_stack_top = .;
@@ -40,7 +38,6 @@ SECTIONS {
 		_svc_stack_bottom = .;  . += 0x1000; _svc_stack_top = .;
 	}
 
-	/* Shared flags — must match bootloader.ld exactly */
 	.shared_flags 0x88000 (NOLOAD) : {
 		_shared_flags_start = .;
 		*(.shared_flags)

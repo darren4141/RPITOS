@@ -41,6 +41,7 @@ static void bootloader_recovery_window()
   while (1) {
     asm volatile ("mrrc p15, 0, %0, %1, c14" : "=r" (lo), "=r" (hi));
     if ((((uint64_t)hi << 32) | lo) - start >= ticks) {
+      boot_flags.dfu_requested = DFU_REQUEST;
       uart_print("boot: recovery window closed\r\n");
       break;
     }
@@ -59,21 +60,14 @@ static void bootloader_init()
 {
   StatusCode status;
   uart_init(UART_BAUDRATE_115200);
-  uart_print("Bootloader start, initializing components\r\n");
+  uart_print("\r\n\n-------------------Bootloader start, initializing components-------------------\r\n");
   uart_print("uart initialized\r\n");
   jtag_gpio_init();
   uart_print("jtag initialized\r\n");
 
-  // Read PM_RSTS before boot_flags_init() — boot_flags_init() may clobber
-  // reset_reason with RESET_REASON_COLD if RAM didn't survive the reset.
-  // PM_RSTS is a sticky hardware register that survives all reset types.
-  bool wdt_reset = watchdog_was_wdt_reset();
 
   boot_flags_init();
-  if (wdt_reset) {
-    boot_flags.reset_reason = RESET_REASON_WATCHDOG;
-    uart_print("boot: *** previous reset caused by watchdog timeout ***\r\n");
-  }
+
   uart_print("boot flags initialized\r\n");
 
   status = emmc_init();
@@ -88,6 +82,13 @@ static void bootloader_init()
   uart_print("boot module initialized\r\n");
   STATUS_OK_OR_WARN(dfu_init());
   uart_print("dfu module initialized\r\n");
+  uart_print("-------------------Done initializing components-------------------\r\n\n\n");
+
+
+  uart_print("\r\n\n-------------------Checking boot flags and WDG metadata-------------------\r\n");
+
+  STATUS_OK_OR_WARN(wdt_meta_read());
+  uart_print("wdt meta loaded\r\n");
 
   if (boot_flags.reset_reason == RESET_REASON_COLD) {
     boot_flags.fw_crc_ok = (boot_validateApp() == E_OK) ? 1U : 0U;
@@ -96,19 +97,59 @@ static void bootloader_init()
   else {
     uart_print("warm boot: trusting preserved boot flags\r\n");
   }
+
+  wdt_meta.wdt_reset_count++;
+  uart_printf("boot: WDT reset #%u (tolerance=%d, policy=%u)\r\n",
+              wdt_meta.wdt_reset_count,
+              wdt_meta.wdt_reset_tolerance,
+              wdt_meta.wdt_reset_policy);
+
+  if ((wdt_meta.wdt_reset_tolerance >= 0)
+      && ((int32_t)wdt_meta.wdt_reset_count > wdt_meta.wdt_reset_tolerance)) {
+    if (wdt_meta.wdt_reset_policy == (uint32_t)WATCHDOG_RESET_POLICY_FORCE_UPDATE) {
+      uart_print("boot: tolerance exceeded, forcing DFU\r\n");
+      wdt_meta.wdt_reset_count = 0U;
+      boot_flags.dfu_requested = DFU_REQUEST;
+      boot_flags.fw_crc_ok = 0;
+      boot_flags.reset_reason = RESET_REASON_SOFTWARE;
+
+      // Clear the app header's CRC on eMMC so a subsequent cold boot (without
+      // preserved boot_flags) also fails validation and cannot jump to the
+      // stale app until new firmware is DFU'd in.
+      uint8_t header_buf[SECTOR_SIZE] __attribute__((aligned(4)));
+      if (emmc_read_blocks(EMMC_SECTOR_APP, header_buf, 1U) == E_OK) {
+        StartPacket *hdr = (StartPacket *)header_buf;
+        hdr->crc = 0U;
+        if (emmc_write_blocks(EMMC_SECTOR_APP, header_buf, 1U) != E_OK) {
+          uart_print("boot: failed to clear app header CRC on eMMC\r\n");
+        }
+        else {
+          uart_print("boot: app header CRC cleared on eMMC\r\n");
+        }
+      }
+      else {
+        uart_print("boot: failed to read app header for CRC clear\r\n");
+      }
+    }
+  }
+
+  STATUS_OK_OR_WARN(wdt_meta_write());
+  uart_print("-------------------Done checking metadata-------------------\r\n");
 }
 
 static StatusCode bootloader_execute()
 {
   StatusCode ret;
 
-  uart_print("Bootloader executing...\r\n");
+  uart_print("\r\n\n-------------------Bootloader executing-------------------\r\n");
 
   if (boot_flags.dfu_requested == DFU_REQUEST) {
     uart_print("DFU requested! entering DFU recv loop...\r\n");
     if (dfu_receive() != E_OK) {
       return E_ABORTED;
     }
+    wdt_meta.wdt_reset_count = 0U;
+    STATUS_OK_OR_WARN(wdt_meta_write());
     ret = boot_loadApp();
     if (ret != E_OK) {
       return ret;
@@ -128,6 +169,8 @@ static StatusCode bootloader_execute()
     if (dfu_receive() != E_OK) {
       return E_ABORTED;
     }
+    wdt_meta.wdt_reset_count = 0U;
+    STATUS_OK_OR_WARN(wdt_meta_write());
     ret = boot_loadApp();
     if (ret != E_OK) {
       return ret;
@@ -140,7 +183,9 @@ static StatusCode bootloader_execute()
 void kmain(void)
 {
   bootloader_init();
-  bootloader_recovery_window();
+  // bootloader_recovery_window();
+
+  boot_flags.dfu_requested = DFU_REQUEST;
 
   for (uint32_t retries = NUM_RETRIES; retries > 0; retries--) {
     StatusCode ret = bootloader_execute();
@@ -153,6 +198,8 @@ void kmain(void)
     StatusCode ret = boot_validateApp();
     if (ret == E_OK) {
       boot_flags.fw_crc_ok = 1;
+      wdt_meta.wdt_reset_count = 0U;
+      STATUS_OK_OR_WARN(wdt_meta_write());
       boot_loadApp();
       boot_jumpToApp();
     }

@@ -9,6 +9,8 @@ static uint16_t taskCounter = 0;
 // This means no amount of stack overflow can corrupt a TCB.
 static TaskControlBlock tcb_pool[MAX_NUM_TASKS];
 
+static void prvTaskExitTrap(void);
+
 static StackType_t *initializeTaskStack(StackType_t *topOfStack, TaskFunction_t taskFunction, void *taskParams)
 {
   // SPSR — SVC mode, interrupts enabled, Thumb or ARM
@@ -17,6 +19,12 @@ static StackType_t *initializeTaskStack(StackType_t *topOfStack, TaskFunction_t 
 
   // PC — task entry point
   *topOfStack = (StackType_t)taskFunction;
+  topOfStack--;
+
+  // LR — must match the [r0-r12][lr][pc][spsr] frame that _irq_handler saves
+  // with push {r0-r12, lr}. Points at the exit trap so a task function that
+  // returns is caught instead of branching to garbage.
+  *topOfStack = (StackType_t)prvTaskExitTrap;
   topOfStack--;
 
   // R12 down to R1 — all zero
@@ -64,6 +72,8 @@ StatusCode task_create(TaskFunction_t taskFunction, uint16_t stack_depth, TaskPr
   taskCounter++;
 
   (*p_task_control_block)->priority = priority;
+  (*p_task_control_block)->base_priority = priority;
+  (*p_task_control_block)->mutexes_held = 0;
 
   (*p_task_control_block)->p_EndOfStack = (*p_task_control_block)->p_Stack + stack_depth - 1;
 
