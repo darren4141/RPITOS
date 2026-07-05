@@ -2,6 +2,7 @@
   "samples": [
     "boot/bootstrap",
     "boot/bootloader",
+    "boot/wiper",
     "rtos/full_demo",
     "rtos/heavy_overlap",
     "rtos/preemption",

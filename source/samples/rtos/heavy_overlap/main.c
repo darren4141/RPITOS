@@ -194,6 +194,10 @@ void kmain(void)
   queue_init(&test_queue, 4, sizeof(uint32_t));
   semaphore_init(&shared_semaphore, 1, 1);
   dfu_trigger_reset();
+
+  // A/B trial boot: confirm this app slot now that init succeeded.
+  wdt_meta_confirm_slot();
+
   __asm__ volatile ("cpsie i" ::: "memory");
 
   schedulerStart();

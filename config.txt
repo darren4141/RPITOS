@@ -1,3 +1,0 @@
-arm_64bit=0
-kernel=kernel7l.img
-enable_jtag_gpio=1

@@ -15,13 +15,13 @@ The header is placed at offset 0 of the output and zero-padded to one full
 
 Usage examples:
 
-  # Bootloader image — write to eMMC sector 2048
+  # Bootloader image — write to eMMC sector 1064960 (partition 2 start)
   python make_fw_image.py bootloader.img --target bootloader -o bootloader_with_header.bin
-  dd if=bootloader_with_header.bin of=/dev/sdX bs=512 seek=2048
+  dd if=bootloader_with_header.bin of=/dev/sdX bs=512 seek=1064960
 
-  # App image — write to eMMC sector 4096
-  python make_fw_image.py full_demo.img --target app -o app_with_header.bin
-  dd if=app_with_header.bin of=/dev/sdX bs=512 seek=4096
+  # App image (slot A) — write to eMMC sector 1067008
+  python make_fw_image.py full_demo.img --target app_a -o app_with_header.bin
+  dd if=app_with_header.bin of=/dev/sdX bs=512 seek=1067008
 """
 
 import argparse
@@ -37,10 +37,14 @@ SECTOR_SIZE = 512
 _HEADER_FMT  = "<III"
 _HEADER_SIZE = struct.calcsize(_HEADER_FMT)   # 12 bytes
 
-# eMMC sector numbers — must match emmc.h
+# eMMC sector numbers — must match emmc.h. Firmware lives in partition 2, above
+# the 512 MB FAT boot partition, so raw dd writes can't corrupt the GPU's files.
+_EMMC_FW_BASE = 1064960   # partition-2 start LBA (see `fdisk -lu`); == EMMC_FW_BASE
 _EMMC_SECTOR = {
-    "bootloader": 2048,
-    "app":        4096,
+    "bootloader": _EMMC_FW_BASE + 0,       # 1064960
+    "app":        _EMMC_FW_BASE + 2048,    # 1067008  (slot A, default)
+    "app_a":      _EMMC_FW_BASE + 2048,    # 1067008
+    "app_b":      _EMMC_FW_BASE + 18432,   # 1083392
 }
 
 
@@ -68,9 +72,10 @@ def main() -> None:
     )
     parser.add_argument("input",
                         help="Raw firmware binary produced by the build (e.g. bootloader.img)")
-    parser.add_argument("--target", choices=["bootloader", "app"], default="bootloader",
+    parser.add_argument("--target", choices=["bootloader", "app", "app_a", "app_b"],
+                        default="bootloader",
                         help="Target slot — controls the dd seek offset shown in output "
-                             "(default: bootloader)")
+                             "(default: bootloader). 'app' == 'app_a'.")
     parser.add_argument("-o", "--output", default=None,
                         help="Output file (default: <input-stem>_with_header.bin)")
     parser.add_argument("-v", "--version", type=int, default=1,

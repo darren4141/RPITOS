@@ -19,9 +19,9 @@ StatusCode boot_init()
   return E_OK;
 }
 
-StatusCode boot_validateApp()
+StatusCode boot_validateApp(uint32_t app_sector)
 {
-  emmc_read_blocks(EMMC_SECTOR_APP, current_sector, 1U);
+  emmc_read_blocks(app_sector, current_sector, 1U);
   const StartPacket *start_pkt = (const StartPacket *)current_sector;
 
   if ((start_pkt->version_num != 1) || (start_pkt->fw_length == 0)) {
@@ -30,7 +30,7 @@ StatusCode boot_validateApp()
 
   uint32_t remaining = start_pkt->fw_length;
   uint32_t expected_crc = start_pkt->crc;
-  uint32_t sector = EMMC_SECTOR_APP + 1;
+  uint32_t sector = app_sector + 1;
 
   CRC32_t ctx;
   crc32_start(&ctx);
@@ -49,16 +49,12 @@ StatusCode boot_validateApp()
   return (actual_crc == expected_crc) ? E_OK : E_CORRUPTED;
 }
 
-StatusCode boot_loadApp()
+StatusCode boot_loadApp(uint32_t app_sector)
 {
   uart_print("Loading app");
 
-  if (boot_flags.fw_crc_ok != 1) {
-    return E_CORRUPTED;
-  }
-
   // Read the first sector to get our metadata
-  emmc_read_blocks(EMMC_SECTOR_APP, current_sector, 1U);
+  emmc_read_blocks(app_sector, current_sector, 1U);
 
   StartPacket *start_pkt = (StartPacket *)current_sector;
 
@@ -66,7 +62,7 @@ StatusCode boot_loadApp()
 
   uint32_t ulSectors = BYTES_TO_SECTORS(start_pkt->fw_length);
 
-  emmc_read_blocks(EMMC_SECTOR_APP + 1, (void *)APP_START_ADDR, ulSectors);
+  emmc_read_blocks(app_sector + 1, (void *)APP_START_ADDR, ulSectors);
 
   uart_print("App hex dump (4 bytes = 1 ARM instruction):\r\n");
   for (uint32_t i = 0; i < 4; i += 4) {

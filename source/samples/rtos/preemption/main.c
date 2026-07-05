@@ -134,6 +134,10 @@ void kmain(void)
   gic_init();
   gentimer_init(&clk_freq, hz);
   dfu_trigger_reset();
+
+  // A/B trial boot: confirm this app slot now that init succeeded.
+  wdt_meta_confirm_slot();
+
   __asm__ volatile ("cpsie i" ::: "memory");
 
   schedulerStart();

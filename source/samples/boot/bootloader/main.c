@@ -28,7 +28,7 @@ static void bootloader_recovery_window()
     return;
   }
 
-  uart_print("boot: recovery window open (100ms) — send DFU trigger to override\r\n");
+  uart_print("boot: recovery window open (100ms) - send DFU trigger to override\r\n");
 
   uint32_t frq, lo, hi;
   asm volatile ("mrc  p15, 0, %0, c14, c0, 0" : "=r" (frq));
@@ -88,14 +88,33 @@ static void bootloader_init()
   uart_print("\r\n\n-------------------Checking boot flags and WDG metadata-------------------\r\n");
 
   STATUS_OK_OR_WARN(wdt_meta_read());
-  uart_print("wdt meta loaded\r\n");
+  uart_printf("wdt meta loaded - active app slot %s%s\r\n",
+              APP_SLOT_LETTER(wdt_meta.active_app_slot),
+              wdt_meta.app_slot_trial ? " (trial)" : "");
 
-  if (boot_flags.reset_reason == RESET_REASON_COLD) {
-    boot_flags.fw_crc_ok = (boot_validateApp() == E_OK) ? 1U : 0U;
-    uart_print("cold boot: re-validated app in eMMC\r\n");
-  }
-  else {
-    uart_print("warm boot: trusting preserved boot flags\r\n");
+  // Revalidate the active slot on a cold boot; a rollback below also forces it.
+  bool revalidate = (boot_flags.reset_reason == RESET_REASON_COLD);
+
+  // ── A/B trial resolution: judge the slot the *previous* boot left on trial ──
+  // A healthy app confirms (clears the trial flag) on its first boot, so the
+  // counter only climbs for an app that never reaches a good state.
+  if (wdt_meta.app_slot_trial) {
+    wdt_meta.trial_boot_count++;
+    if (wdt_meta.trial_boot_count >= APP_SLOT_TRIAL_MAX_ATTEMPTS) {
+      uint32_t prev = APP_SLOT_OTHER(wdt_meta.active_app_slot);
+      uart_printf("boot: trial slot %s unconfirmed after %u boots - rolling back to %s\r\n",
+                  APP_SLOT_LETTER(wdt_meta.active_app_slot),
+                  wdt_meta.trial_boot_count, APP_SLOT_LETTER(prev));
+      wdt_meta.active_app_slot = prev;
+      wdt_meta.app_slot_trial = 0U;
+      wdt_meta.trial_boot_count = 0U;
+      revalidate = true;
+    }
+    else {
+      uart_printf("boot: active slot %s on trial, attempt %u/%u\r\n",
+                  APP_SLOT_LETTER(wdt_meta.active_app_slot),
+                  wdt_meta.trial_boot_count, APP_SLOT_TRIAL_MAX_ATTEMPTS);
+    }
   }
 
   wdt_meta.wdt_reset_count++;
@@ -104,33 +123,36 @@ static void bootloader_init()
               wdt_meta.wdt_reset_tolerance,
               wdt_meta.wdt_reset_policy);
 
+  // ── Reset-tolerance policy (independent of the automatic A/B trial above) ──
   if ((wdt_meta.wdt_reset_tolerance >= 0)
       && ((int32_t)wdt_meta.wdt_reset_count > wdt_meta.wdt_reset_tolerance)) {
     if (wdt_meta.wdt_reset_policy == (uint32_t)WATCHDOG_RESET_POLICY_FORCE_UPDATE) {
       uart_print("boot: tolerance exceeded, forcing DFU\r\n");
       wdt_meta.wdt_reset_count = 0U;
       boot_flags.dfu_requested = DFU_REQUEST;
-      boot_flags.fw_crc_ok = 0;
       boot_flags.reset_reason = RESET_REASON_SOFTWARE;
-
-      // Clear the app header's CRC on eMMC so a subsequent cold boot (without
-      // preserved boot_flags) also fails validation and cannot jump to the
-      // stale app until new firmware is DFU'd in.
-      uint8_t header_buf[SECTOR_SIZE] __attribute__((aligned(4)));
-      if (emmc_read_blocks(EMMC_SECTOR_APP, header_buf, 1U) == E_OK) {
-        StartPacket *hdr = (StartPacket *)header_buf;
-        hdr->crc = 0U;
-        if (emmc_write_blocks(EMMC_SECTOR_APP, header_buf, 1U) != E_OK) {
-          uart_print("boot: failed to clear app header CRC on eMMC\r\n");
-        }
-        else {
-          uart_print("boot: app header CRC cleared on eMMC\r\n");
-        }
-      }
-      else {
-        uart_print("boot: failed to read app header for CRC clear\r\n");
-      }
     }
+    else if (wdt_meta.wdt_reset_policy == (uint32_t)WATCHDOG_RESET_POLICY_ROLLBACK) {
+      uint32_t prev = APP_SLOT_OTHER(wdt_meta.active_app_slot);
+      uart_printf("boot: tolerance exceeded, rolling back to slot %s\r\n",
+                  APP_SLOT_LETTER(prev));
+      wdt_meta.active_app_slot = prev;
+      wdt_meta.app_slot_trial = 0U;
+      wdt_meta.trial_boot_count = 0U;
+      wdt_meta.wdt_reset_count = 0U;
+      revalidate = true;
+    }
+  }
+
+  uint32_t active_sector = APP_SLOT_TO_SECTOR(wdt_meta.active_app_slot);
+  if (revalidate) {
+    boot_flags.fw_crc_ok = (boot_validateApp(active_sector) == E_OK) ? 1U : 0U;
+    uart_printf("boot: validated active slot %s -> %s\r\n",
+                APP_SLOT_LETTER(wdt_meta.active_app_slot),
+                boot_flags.fw_crc_ok ? "OK" : "INVALID");
+  }
+  else {
+    uart_print("warm boot: trusting preserved boot flags\r\n");
   }
 
   STATUS_OK_OR_WARN(wdt_meta_write());
@@ -140,43 +162,40 @@ static void bootloader_init()
 static StatusCode bootloader_execute()
 {
   StatusCode ret;
+  bool did_dfu = false;
 
   uart_print("\r\n\n-------------------Bootloader executing-------------------\r\n");
 
   if (boot_flags.dfu_requested == DFU_REQUEST) {
     uart_print("DFU requested! entering DFU recv loop...\r\n");
     if (dfu_receive() != E_OK) {
-      return E_ABORTED;
+      return E_ABORTED;   // failed: active slot unchanged
     }
-    wdt_meta.wdt_reset_count = 0U;
-    STATUS_OK_OR_WARN(wdt_meta_write());
-    ret = boot_loadApp();
-    if (ret != E_OK) {
-      return ret;
-    }
-    boot_jumpToApp();
+    did_dfu = true;
   }
-  else if (boot_flags.fw_crc_ok) {
-    uart_print("Valid app found, loading app...\r\n");
-    ret = boot_loadApp();
-    if (ret != E_OK) {
-      return ret;
-    }
-    boot_jumpToApp();
-  }
-  else {
-    uart_print("No valid app found, entering DFU recv loop...\r\n");
+  else if (!boot_flags.fw_crc_ok) {
+    uart_print("No valid app in active slot, entering DFU recv loop...\r\n");
     if (dfu_receive() != E_OK) {
       return E_ABORTED;
     }
+    did_dfu = true;
+  }
+  else {
+    uart_print("Valid app found, loading active slot...\r\n");
+  }
+
+  // On success dfu_receive() read-back-validated the new image and flipped the
+  // active slot to it (now on trial), so just boot whatever slot is active.
+  if (did_dfu) {
     wdt_meta.wdt_reset_count = 0U;
     STATUS_OK_OR_WARN(wdt_meta_write());
-    ret = boot_loadApp();
-    if (ret != E_OK) {
-      return ret;
-    }
-    boot_jumpToApp();
   }
+
+  ret = boot_loadApp(APP_SLOT_TO_SECTOR(wdt_meta.active_app_slot));
+  if (ret != E_OK) {
+    return ret;
+  }
+  boot_jumpToApp();
   return E_OK;
 }
 
@@ -185,8 +204,6 @@ void kmain(void)
   bootloader_init();
   // bootloader_recovery_window();
 
-  boot_flags.dfu_requested = DFU_REQUEST;
-
   for (uint32_t retries = NUM_RETRIES; retries > 0; retries--) {
     StatusCode ret = bootloader_execute();
     uart_printf("boot: attempt failed (%d), %u retries left\r\n", ret, retries - 1);
@@ -194,13 +211,11 @@ void kmain(void)
 
   uart_print("boot: all retries exhausted, entering DFU recovery loop\r\n");
   while (1) {
-    dfu_receive();
-    StatusCode ret = boot_validateApp();
-    if (ret == E_OK) {
-      boot_flags.fw_crc_ok = 1;
+    if (dfu_receive() == E_OK) {
+      // dfu_receive() validated the image and flipped the active slot to it.
       wdt_meta.wdt_reset_count = 0U;
       STATUS_OK_OR_WARN(wdt_meta_write());
-      boot_loadApp();
+      boot_loadApp(APP_SLOT_TO_SECTOR(wdt_meta.active_app_slot));
       boot_jumpToApp();
     }
     uart_print("boot: DFU recovery failed, retrying\r\n");

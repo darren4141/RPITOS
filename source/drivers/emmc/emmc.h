@@ -5,40 +5,72 @@
 
 #include "status.h"
 
-#define SECTOR_SIZE                 512
+#define SECTOR_SIZE                   512
 #define BYTES_TO_SECTORS(x) ((x) + SECTOR_SIZE - 1) / SECTOR_SIZE
 
-// eMMC sector layout
+// eMMC sector layout — PHYSICAL LBA, must match the on-disk MBR partition table
+// (verify with `sudo fdisk -lu /dev/sdX`). All firmware lives ABOVE the FAT boot
+// partition so raw dd/DFU writes can never corrupt the files the GPU reads.
 //
-//  0      – 2047  : VideoCore FAT32 partition (kernel7l.img = bootstrap)
-//                   DO NOT TOUCH — GPU reads files from here by name
-//  2048   – 2559  : Bootloader slot A  (header @ 2048, binary @ 2049+)
-//  2560   – 4095  : Bootloader slot B  (reserved for future A/B update)
-//  4096   – 20479 : App                (header @ 4096, binary @ 4097+)
-//  20480          : Metadata
-//  20481  – 36864 : DFU staging buffer
+// LBA 0        - 16383     : MBR + alignment gap
+// LBA 16384    - 1064959   : Partition 1 — FAT32 boot (512 MB). Holds
+// start4.elf, fixup4.dat, *.dtb, config.txt,
+// bootstrap.img. GPU reads these BY NAME.
+// *** Never write raw sectors in this range. ***
+// LBA 1064960  - end       : Partition 2 — repurposed as the raw firmware
+// region (was a leftover Linux partition). Laid out:
+//
+// +0      (1064960) - +511    : Bootloader slot A  (header @ base, binary @ +1)
+// +512    (1065472) - +1023   : Bootloader slot B  (reserved)
+// +1024   (1065984)          : Metadata           (active-slot + WDT state)
+// +1025   (1065985) - +2047   : reserved          (metadata growth)
+// +2048   (1067008) - +18431  : App slot A         (header @ base, binary @ +1)
+// +18432  (1083392) - +34815  : App slot B
+//
+// App slots are A/B: DFU writes the inactive slot, then metadata flips the
+// active slot. The inactive slot doubles as the DFU staging area.
+//
+// NOTE: EMMC_FW_BASE is the start LBA of partition 2. If you ever repartition,
+// update it to match fdisk — everything below is relative to it.
 
-#define EMMC_SECTOR_VIDEOCORE         0
-#define EMMC_SECTOR_BOOTLOADER        2048   // header sector; binary at +1
-#define EMMC_SECTOR_BOOTLOADER_B      2560   // reserved — future A/B slot
-#define EMMC_SECTOR_APP               4096   // header sector; binary at +1
-#define EMMC_SECTOR_METADATA          20480
-#define EMMC_SECTOR_DFU_BUFFER        20481
+#define EMMC_FW_BASE                  1064960U                // partition-2 start LBA
+
+#define EMMC_SECTOR_BOOTLOADER        (EMMC_FW_BASE + 0U)     // header; binary at +1
+#define EMMC_SECTOR_BOOTLOADER_B      (EMMC_FW_BASE + 512U)   // reserved — future A/B
+#define EMMC_SECTOR_METADATA          (EMMC_FW_BASE + 1024U)
+#define EMMC_SECTOR_APP_A             (EMMC_FW_BASE + 2048U)  // header; binary at +1
+#define EMMC_SECTOR_APP_B             (EMMC_FW_BASE + 18432U) // header; binary at +1
+#define EMMC_SECTOR_APP               EMMC_SECTOR_APP_A       // default active-slot alias
+
+// Firmware must NEVER write below this LBA — this is the choke point that
+// protects the MBR, the alignment gap, and the entire FAT boot partition.
+// Enforced in emmc_write_blocks().
+#define EMMC_FIRMWARE_FLOOR           EMMC_SECTOR_BOOTLOADER
 
 // sizes (in sectors)
 #define EMMC_SECTOR_SIZE_BOOTLOADER   512    // 256 KB per bootloader slot
 #define EMMC_SECTOR_SIZE_BOOTLOADER_B 512
-#define EMMC_SECTOR_SIZE_APP          16384  // 8 MB for app
+#define EMMC_SECTOR_SIZE_APP          16384  // 8 MB per app slot
 #define EMMC_SECTOR_SIZE_METADATA     1      // 512 bytes, one sector
-#define EMMC_SECTOR_SIZE_DFU_BUFFER   16384  // 8 MB scratch space
+
+// App slot identifiers, stored in metadata (WdtMeta.active_app_slot). Distinct
+// 32-bit patterns so a torn/half-erased field is unlikely to alias a valid slot.
+#define APP_SLOT_A                    0xAAAAAAAAU
+#define APP_SLOT_B                    0xBBBBBBBBU
+
+// Resolve a slot id to its header sector; any unknown value defaults to slot A.
+#define APP_SLOT_TO_SECTOR(slot) ((slot) == APP_SLOT_B ? EMMC_SECTOR_APP_B : EMMC_SECTOR_APP_A)
+// The opposite (inactive) slot — the one DFU writes into.
+#define APP_SLOT_OTHER(slot)     ((slot) == APP_SLOT_B ? APP_SLOT_A : APP_SLOT_B)
+// Human-readable slot letter for logging.
+#define APP_SLOT_LETTER(slot)    ((slot) == APP_SLOT_B ? "B" : "A")
 
 // byte addresses (for documentation)
-#define EMMC_BYTE_VIDEOCORE           (EMMC_SECTOR_VIDEOCORE  * SECTOR_SIZE)
 #define EMMC_BYTE_BOOTLOADER          (EMMC_SECTOR_BOOTLOADER * SECTOR_SIZE)
-#define EMMC_BYTE_APP                 (EMMC_SECTOR_APP        * SECTOR_SIZE)
-#define EMMC_BYTE_METADATA            (EMMC_SECTOR_METADATA   * SECTOR_SIZE)
+#define EMMC_BYTE_APP                 (EMMC_SECTOR_APP * SECTOR_SIZE)
+#define EMMC_BYTE_METADATA            (EMMC_SECTOR_METADATA * SECTOR_SIZE)
 
-#define EMMC2_BASE                  0xFE340000
+#define EMMC2_BASE                    0xFE340000
 
 typedef struct {
   uint32_t ARG2;            // 0x00  ACMD23 argument

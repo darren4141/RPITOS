@@ -193,7 +193,9 @@ void kmain(void)
   semaphore_init(&shared_semaphore, 1, 1);
   dfu_trigger_reset();
   watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 3);
+  watchdog_set_confirm_slot_timing(2000);
   watchdog_task_start();
+
   __asm__ volatile ("cpsie i" ::: "memory");
 
   schedulerStart();
