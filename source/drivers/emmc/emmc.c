@@ -284,6 +284,13 @@ StatusCode emmc_write_blocks(uint32_t ulSector, const void *pvBuf, uint32_t ulCo
     return E_OK;
   }
 
+  // Hard floor: firmware must never write below the firmware region.
+  if (ulSector < EMMC_FIRMWARE_FLOOR) {
+    uart_printf("emmc: BLOCKED write to reserved sector %u (floor %u)\r\n",
+                ulSector, (uint32_t)EMMC_FIRMWARE_FLOOR);
+    return E_INVALID_ARGS;
+  }
+
   uint32_t ulArg = xIsHC ? ulSector : ulSector * SECTOR_SIZE;
   const uint32_t *pulBuf = (const uint32_t *)pvBuf;
 

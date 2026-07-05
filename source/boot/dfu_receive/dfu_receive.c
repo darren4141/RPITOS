@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 
+#include "boot.h"
 #include "boot_flags.h"
 #include "crc.h"
 #include "dfu_trigger.h"
@@ -20,6 +21,7 @@ static uint32_t current_sector_counter;
 static bool unwritten_sector;
 static bool started;
 static bool is_self_update;
+static uint32_t dfu_base_sector;   // header sector of the slot being written
 
 static StatusCode dfu_packet_receive(DFU_Packet *packet)
 {
@@ -111,6 +113,7 @@ StatusCode dfu_init()
   unwritten_sector = false;
   started = false;
   is_self_update = false;
+  dfu_base_sector = 0;
 
   return E_OK;
 }
@@ -130,7 +133,6 @@ StatusCode dfu_receive()
 
   DFU_State state = DFU_STATE_START;
 
-  bool flags_crc_ok_set = false;
   uint32_t img_expected_crc;
   uint32_t img_length = 0;
   uint32_t bytes_hashed = 0;
@@ -139,6 +141,8 @@ StatusCode dfu_receive()
   while (state != DFU_STATE_DONE && state != DFU_STATE_ABORT) {
     DFU_Packet packet;
     if (dfu_packet_receive(&packet) != E_OK) {
+      // Timed out mid-transfer. We were writing the *inactive* slot, so the
+      // active slot is untouched — just abandon without committing the flip.
       uart_print("DFU: session timed out\r\n");
       return E_TIMED_OUT;
     }
@@ -164,7 +168,10 @@ StatusCode dfu_receive()
         img_length = start_pkt->fw_length;
         crc32_start(&crc_ctx);
 
-        emmc_write_blocks(EMMC_SECTOR_APP, current_sector, 1U);
+        // A/B: write the inactive slot. The active (running) slot is left
+        // untouched and stays valid until we validate and flip at CMD_FINISH.
+        dfu_base_sector = APP_SLOT_TO_SECTOR(APP_SLOT_OTHER(wdt_meta.active_app_slot));
+        emmc_write_blocks(dfu_base_sector, current_sector, 1U);
         sectors_written = 1;
 
         is_self_update = false;
@@ -194,7 +201,8 @@ StatusCode dfu_receive()
         img_length = start_pkt->fw_length;
         crc32_start(&crc_ctx);
 
-        emmc_write_blocks(EMMC_SECTOR_BOOTLOADER, current_sector, 1U);
+        dfu_base_sector = EMMC_SECTOR_BOOTLOADER;
+        emmc_write_blocks(dfu_base_sector, current_sector, 1U);
         sectors_written = 1;
 
         is_self_update = true;
@@ -215,14 +223,7 @@ StatusCode dfu_receive()
         break;
       }
       if (state == DFU_STATE_RECIEVE_DATA) {
-        // Only invalidate app CRC flag for app updates — self-update doesn't
-        // touch the app image so its validity should be preserved.
-        if (!flags_crc_ok_set && !is_self_update) {
-          flags_crc_ok_set = true;
-          boot_flags.fw_crc_ok = 0;
-        }
-
-        uint32_t base_sector = is_self_update ? EMMC_SECTOR_BOOTLOADER : EMMC_SECTOR_APP;
+        uint32_t base_sector = dfu_base_sector;
 
         if (current_sector_counter + packet.LEN >= SECTOR_SIZE) {
           uint32_t diff = current_sector_counter + packet.LEN - SECTOR_SIZE;
@@ -280,23 +281,43 @@ StatusCode dfu_receive()
         break;
       }
 
-      uint32_t base_sector = is_self_update ? EMMC_SECTOR_BOOTLOADER : EMMC_SECTOR_APP;
-
       if (unwritten_sector) {
         for (uint32_t i = current_sector_counter; i < SECTOR_SIZE; i++) {
           current_sector[i] = 0;
         }
-        emmc_write_blocks(base_sector + sectors_written, current_sector, 1U);
+        emmc_write_blocks(dfu_base_sector + sectors_written, current_sector, 1U);
       }
 
-      uart_tx_raw(DFU_ACK);
-
       if (is_self_update) {
+        uart_tx_raw(DFU_ACK);
         uart_print("DFU: bootloader update complete, resetting\r\n");
         uart_deinit();
         watchdog_trigger_reset();
         // never reached
       }
+
+      // App update landed in the inactive slot. The in-flight CRC only proves
+      // the transfer was intact, not that the bytes actually committed to eMMC
+      // — so validate by reading the slot back before flipping to it.
+      uint32_t new_slot = APP_SLOT_OTHER(wdt_meta.active_app_slot);
+      if (boot_validateApp(APP_SLOT_TO_SECTOR(new_slot)) != E_OK) {
+        uart_print("DFU: new slot failed read-back validation, not committing\r\n");
+        uart_tx_raw(DFU_NACK);
+        state = DFU_STATE_ABORT;   // active slot untouched — nothing to roll back
+        break;
+      }
+
+      // Commit: make the new slot active but mark it on-trial. The app must call
+      // wdt_meta_confirm_slot() once healthy, or the bootloader rolls back.
+      wdt_meta.active_app_slot = new_slot;
+      wdt_meta.app_slot_trial = 1U;
+      wdt_meta.trial_boot_count = 0U;
+      wdt_meta_write();
+      boot_flags.fw_crc_ok = 1U;
+
+      uart_tx_raw(DFU_ACK);
+      uart_printf("DFU: slot %s written & validated, now active (trial)\r\n",
+                  APP_SLOT_LETTER(new_slot));
 
       state = DFU_STATE_DONE;
       break;
@@ -313,9 +334,9 @@ StatusCode dfu_receive()
   }
 
   if (state == DFU_STATE_DONE) {
-    boot_flags.fw_crc_ok = 1;
     return E_OK;
   }
 
+  // Aborted while writing the inactive slot — active slot never changed.
   return E_ABORTED;
 }

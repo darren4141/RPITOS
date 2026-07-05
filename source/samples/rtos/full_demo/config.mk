@@ -1,5 +1,5 @@
 # Drivers to compile
-SAMPLE_DRIVERS         := gpio uart gentimer gic jtag reset interrupts watchdog emmc
+SAMPLE_DRIVERS         := gpio uart gentimer gic jtag reset interrupts watchdog emmc crc
 
 # RTOS kernel components to compile
 SAMPLE_KERNEL          := scheduler task semaphore mutex queue heap

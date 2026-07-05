@@ -1,10 +1,35 @@
-# Bootloader — mount sdf1 and copy as kernel7l.img
+# ─────────────────────────────────────────────────────────────────────────────
+# eMMC layout (verify with: sudo fdisk -lu /dev/sdf)
+#   sdf1  16384   – 1064959   512M  FAT32 boot  (start4.elf, config.txt, bootstrap.img)
+#   sdf2  1064960 – end       6.8G  raw firmware region (partition 2)
+#
+# ALL firmware lives at 1064960+ (partition 2), ABOVE the FAT boot partition, so
+# raw dd can never corrupt the GPU's boot files. Offsets must match emmc.h.
+#   bootloader : seek=1064960
+#   metadata   : seek=1065984
+#   app slot A : seek=1067008
+#   app slot B : seek=1083392
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Boot partition (FAT) — copy files by name, do NOT dd firmware here ──
 sudo mount /dev/sdf1 /mnt/emmc
-sudo cp boot7l.img /mnt/emmc/kernel7l.img
-sudo umount /mnt/emmc
+sudo cp config.txt /mnt/emmc/
+sudo cp build/boot/bootstrap/bootstrap.img /mnt/emmc/bootstrap.img
+# also: start4.elf  fixup4.dat  bcm2711-rpi-cm4.dtb   (from raspberrypi/firmware/boot)
+sudo umount /mnt/emmc && sync
 
-# App image — write raw to sector 4096
-sudo dd if=kernel7l.img of=/dev/sdf bs=512 seek=4096 conv=notrunc status=progress
+# ── Bootloader — header+binary to partition 2 start ──
+python tools/make_fw_image.py build/boot/bootloader/bootloader.img --target bootloader -o bootloader_with_header.bin
+sudo dd if=bootloader_with_header.bin of=/dev/sdf bs=512 seek=1064960 conv=notrunc,fsync status=progress
 
-# App image - erase
-sudo dd if=/dev/zero of=/dev/sdf bs=512 seek=4096 count=1 conv=fsync
+# ── App image — slot A ──
+python tools/make_fw_image.py build/rtos/full_demo/full_demo.img --target app_a -o app_with_header.bin
+sudo dd if=app_with_header.bin of=/dev/sdf bs=512 seek=1067008 conv=notrunc,fsync status=progress
+
+# ── Reset metadata so the bootloader defaults to slot A (bad magic → defaults) ──
+sudo dd if=/dev/zero of=/dev/sdf bs=512 seek=1065984 count=1 conv=fsync
+
+sync
+
+# ── Verify a write landed (should show the StartPacket header: 01 00 00 00 ...) ──
+sudo dd if=/dev/sdf bs=512 skip=1064960 count=1 | xxd | head

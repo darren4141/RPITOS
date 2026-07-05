@@ -20,14 +20,20 @@ void kmain(void)
 
   uart_print("wiper: emmc initialized\r\n");
 
-  // Zero the app header at sector 4096 so the bootloader treats the slot as empty.
+  // Zero both app slot headers and the metadata sector so the bootloader sees
+  // no valid app in either A/B slot and (bad metadata magic) defaults to slot A.
   static uint8_t zero_block[SECTOR_SIZE];
-  ret = emmc_write_blocks(EMMC_SECTOR_APP, zero_block, 1U);
-  if (ret != E_OK) {
-    uart_printf("wiper: sector write failed (%d), hanging\r\n", ret);
-    while (1) {}
+  const uint32_t wipe_sectors[] = {
+    EMMC_SECTOR_APP_A, EMMC_SECTOR_APP_B, EMMC_SECTOR_METADATA
+  };
+  for (uint32_t i = 0; i < sizeof(wipe_sectors) / sizeof(wipe_sectors[0]); i++) {
+    ret = emmc_write_blocks(wipe_sectors[i], zero_block, 1U);
+    if (ret != E_OK) {
+      uart_printf("wiper: sector %u write failed (%d), hanging\r\n", wipe_sectors[i], ret);
+      while (1) {}
+    }
   }
-  uart_print("wiper: app slot header (sector 4096) zeroed\r\n");
+  uart_print("wiper: app slot A/B headers + metadata zeroed\r\n");
 
   // Clear boot_flags magic so the bootloader treats this as a cold boot
   // and re-validates the (now-zeroed) app header.
