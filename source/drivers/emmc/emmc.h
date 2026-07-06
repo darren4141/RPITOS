@@ -93,7 +93,9 @@ typedef struct {
   uint32_t CAPABILITIES1;   // 0x44
   uint32_t _pad0[2];
   uint32_t FORCE_IRPT;      // 0x50
-  uint32_t _pad1[7];
+  uint32_t ADMA_ERROR;      // 0x54  ADMA error status
+  uint32_t ADMA_ADDRESS;    // 0x58  ADMA system-address (32-bit descriptor table)
+  uint32_t _pad1[5];        // 0x5C..0x6F
   uint32_t BOOT_TIMEOUT;    // 0x70
   uint32_t DBG_SEL;         // 0x74
   uint32_t _pad2[2];
@@ -151,10 +153,11 @@ static volatile EMMC2Regs_t * const pxEMMC =
 #define INT_DCRC_ERR           (1 << 21) // data CRC
 #define INT_DEND_ERR           (1 << 22) // data end bit
 #define INT_ACMD_ERR           (1 << 24) // auto CMD error
+#define INT_ADMA_ERR           (1 << 25) // ADMA error (see ADMA_ERROR register)
 
 #define INT_ERROR_MASK         (INT_CTO_ERR | INT_CCRC_ERR | INT_CEND_ERR | \
                                 INT_CBAD_ERR | INT_DTO_ERR | INT_DCRC_ERR | \
-                                INT_DEND_ERR | INT_ACMD_ERR | INT_ERR)
+                                INT_DEND_ERR | INT_ACMD_ERR | INT_ADMA_ERR | INT_ERR)
 
 // CMDTM fields
 #define CMD_INDEX(x)             ((x) << 24)
@@ -173,6 +176,28 @@ static volatile EMMC2Regs_t * const pxEMMC =
 #define TM_DAT_DIR_RD          (1 << 4)
 #define TM_AUTO_CMD12          (1 << 2)
 #define TM_BLKCNT_EN           (1 << 1)
+#define TM_DMA_EN              (1 << 0)   // transfer via SDMA/ADMA instead of PIO
+
+// CONTROL0 (Host Control 1) bus width / speed bits
+#define CTRL0_4BIT             (1u << 1)  // 4-bit data width
+#define CTRL0_HS_EN            (1u << 2)  // High Speed enable
+#define CTRL0_8BIT             (1u << 5)  // 8-bit data width (overrides 4-bit)
+
+// CONTROL0 (Host Control 1) DMA-select field, bits [4:3]
+#define CTRL0_DMA_SELECT_MASK  (3u << 3)
+#define CTRL0_DMA_SELECT_ADMA2 (2u << 3)  // 10b = 32-bit ADMA2
+
+// CAPABILITIES0 — ADMA2 supported (SDHCI capabilities bit 19)
+#define CAP0_ADMA2_SUPPORT     (1u << 19)
+
+// ADMA2 descriptor attribute field (low 16 bits of the first 32-bit word):
+//   word0 = (length << 16) | attr,  word1 = 32-bit buffer address
+#define ADMA2_DESC_VALID       (1u << 0)  // line is valid (else -> ADMA error)
+#define ADMA2_DESC_END         (1u << 1)  // last line; stop after it
+#define ADMA2_DESC_INT         (1u << 2)  // raise ADMA interrupt when line done
+#define ADMA2_DESC_ACT_NOP     (0u << 4)  // skip to next line
+#define ADMA2_DESC_ACT_TRAN    (2u << 4)  // transfer len bytes at address
+#define ADMA2_DESC_ACT_LINK    (3u << 4)  // address points to another table
 
 // eMMC commands
 
@@ -182,6 +207,8 @@ static volatile EMMC2Regs_t * const pxEMMC =
 #define CMD3                   (CMD_INDEX(3) | CMD_RESP_48 | CMD_CRCCHK_EN | CMD_IXCHK_EN)
 #define CMD6_SWITCH            (CMD_INDEX(6) | CMD_RESP_48B | CMD_CRCCHK_EN | CMD_IXCHK_EN)
 #define CMD7                   (CMD_INDEX(7) | CMD_RESP_48B | CMD_CRCCHK_EN | CMD_IXCHK_EN)
+#define CMD8                   (CMD_INDEX(8) | CMD_RESP_48 | CMD_CRCCHK_EN | CMD_IXCHK_EN \
+                                | CMD_ISDATA | TM_DAT_DIR_RD)   // eMMC SEND_EXT_CSD (512 B read)
 #define CMD17                  (CMD_INDEX(17) | CMD_RESP_48 | CMD_CRCCHK_EN | CMD_IXCHK_EN \
                                 | CMD_ISDATA | TM_DAT_DIR_RD)
 #define CMD18                  (CMD_INDEX(18) | CMD_RESP_48 | CMD_CRCCHK_EN | CMD_IXCHK_EN \
@@ -198,6 +225,23 @@ static volatile EMMC2Regs_t * const pxEMMC =
 #define EXT_CSD_BUS_WIDTH_1BIT 0
 #define EXT_CSD_BUS_WIDTH_4BIT 1
 #define EXT_CSD_BUS_WIDTH_8BIT 2
+
+// EXT_CSD byte offsets (read via CMD8 SEND_EXT_CSD)
+#define EXT_CSD_HS_TIMING      185  // current speed mode (writable)
+#define EXT_CSD_HS_TIMING_HS   1    // HS_TIMING value for High Speed (<=52 MHz)
+#define EXT_CSD_REV            192  // EXT_CSD structure revision
+#define EXT_CSD_DEVICE_TYPE    196  // CARD_TYPE — supported speed-mode bitmask
+#define EXT_CSD_SEC_COUNT      212  // capacity in 512 B sectors (u32 LE)
+
+// EXT_CSD[196] DEVICE_TYPE / CARD_TYPE bits — which speed modes the device supports
+#define DEVICE_TYPE_HS26       (1u << 0)  // High Speed 26 MHz
+#define DEVICE_TYPE_HS52       (1u << 1)  // High Speed 52 MHz
+#define DEVICE_TYPE_DDR52_18V  (1u << 2)  // HS DDR 52 MHz 1.8/3V
+#define DEVICE_TYPE_DDR52_12V  (1u << 3)  // HS DDR 52 MHz 1.2V
+#define DEVICE_TYPE_HS200_18V  (1u << 4)  // HS200 200 MHz 1.8V
+#define DEVICE_TYPE_HS200_12V  (1u << 5)  // HS200 200 MHz 1.2V
+#define DEVICE_TYPE_HS400_18V  (1u << 6)  // HS400 200 MHz DDR 1.8V
+#define DEVICE_TYPE_HS400_12V  (1u << 7)  // HS400 200 MHz DDR 1.2V
 
 StatusCode emmc_init( void );
 StatusCode emmc_read_blocks( uint32_t ulSector, void *pvBuf, uint32_t ulCount );
