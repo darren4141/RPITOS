@@ -3,8 +3,11 @@
 #include "uart.h"
 
 static uint32_t ulRCA = 1;
-static int xIsHC = 1;   // CM4 eMMC is always high-capacity (sector addressing)
+static int xIsHC = 1;             // CM4 eMMC is always high-capacity (sector addressing)
 static int s_emmc_initialized = 0;
+static int s_adma2_supported = 0; // probed from CAPABILITIES0 at init
+static uint8_t  s_device_type = 0; // EXT_CSD DEVICE_TYPE (supported speed modes)
+static uint32_t s_sec_count = 0;   // EXT_CSD SEC_COUNT (baseline for bus verify)
 
 #define EMMC2_BASE_CLOCK 200000000U
 
@@ -136,6 +139,115 @@ static StatusCode emmc_set_clock(uint32_t ulHz)
   return E_OK;
 }
 
+// Read the 512-byte EXT_CSD register (eMMC CMD8 SEND_EXT_CSD) into buf. Single
+// data block over DAT, same as a CMD17 read but a different command index.
+static StatusCode emmc_read_ext_csd(uint8_t *buf)
+{
+  pxEMMC->BLKSIZECNT = (1u << 16) | SECTOR_SIZE;
+  if (emmc_send_command(CMD8, 0) != E_OK) {
+    return E_CMD;
+  }
+  if (emmc_wait_interrupt(INT_READ_RDY, 2000) != E_OK) {
+    return E_TIMED_OUT;
+  }
+  uint32_t *p = (uint32_t *)buf;
+  for (uint32_t i = 0; i < SECTOR_SIZE / 4; i++) {
+    p[i] = pxEMMC->DATA;
+  }
+  return emmc_wait_interrupt(INT_DATA_DONE, 2000);
+}
+
+// Probe controller capabilities
+static void emmc_probe_capabilities(void)
+{
+  uint32_t cap0 = pxEMMC->CAPABILITIES0;
+  s_adma2_supported = (cap0 & CAP0_ADMA2_SUPPORT) ? 1 : 0;
+  uart_printf("emmc: CAPABILITIES0=0x%08X ADMA2=%s\r\n",
+              cap0, s_adma2_supported ? "yes" : "no");
+
+  static uint8_t ext_csd[SECTOR_SIZE] __attribute__((aligned(4)));
+  if (emmc_read_ext_csd(ext_csd) == E_OK) {
+    s_device_type = ext_csd[EXT_CSD_DEVICE_TYPE];
+    s_sec_count = (uint32_t)ext_csd[EXT_CSD_SEC_COUNT]
+                  | ((uint32_t)ext_csd[EXT_CSD_SEC_COUNT + 1] << 8)
+                  | ((uint32_t)ext_csd[EXT_CSD_SEC_COUNT + 2] << 16)
+                  | ((uint32_t)ext_csd[EXT_CSD_SEC_COUNT + 3] << 24);
+    uart_printf("emmc: EXT_CSD rev=%u DEVICE_TYPE=0x%02X bus_width=%u hs_timing=%u\r\n",
+                ext_csd[EXT_CSD_REV], s_device_type,
+                ext_csd[EXT_CSD_BUS_WIDTH], ext_csd[EXT_CSD_HS_TIMING]);
+    uart_printf("emmc: supports%s%s%s%s%s | %u sectors (~%u MB)\r\n",
+                (s_device_type & DEVICE_TYPE_HS26) ? " HS26" : "",
+                (s_device_type & DEVICE_TYPE_HS52) ? " HS52" : "",
+                (s_device_type & DEVICE_TYPE_DDR52_18V) ? " DDR52" : "",
+                (s_device_type & DEVICE_TYPE_HS200_18V) ? " HS200" : "",
+                (s_device_type & DEVICE_TYPE_HS400_18V) ? " HS400" : "",
+                s_sec_count, s_sec_count / 2048u);
+  }
+  else {
+    uart_print("emmc: EXT_CSD read failed\r\n");
+  }
+}
+
+// Verify the data bus by reading EXT_CSD back and checking SEC_COUNT matches the
+// value captured at the 4-bit baseline. A miswired/failed width or too-fast clock
+// shows up as a corrupted read-back.
+static int emmc_bus_ok(void)
+{
+  static uint8_t tmp[SECTOR_SIZE] __attribute__((aligned(4)));
+  if (emmc_read_ext_csd(tmp) != E_OK) {
+    return 0;
+  }
+  uint32_t sc = (uint32_t)tmp[EXT_CSD_SEC_COUNT]
+                | ((uint32_t)tmp[EXT_CSD_SEC_COUNT + 1] << 8)
+                | ((uint32_t)tmp[EXT_CSD_SEC_COUNT + 2] << 16)
+                | ((uint32_t)tmp[EXT_CSD_SEC_COUNT + 3] << 24);
+  return (s_sec_count != 0) && (sc == s_sec_count);
+}
+
+// Upgrade from the 4-bit / 25 MHz baseline to High Speed (50 MHz) and 8-bit,
+// where the device supports it and the read-back verifies. Every step reverts to
+// the last known-good setting on failure, so the boot path can never break.
+static void emmc_negotiate_speed(void)
+{
+  int hs = 0;
+  uint32_t width = 4;
+
+  // High Speed: card HS_TIMING=1, host HS-enable, 50 MHz (200 MHz base / 2 / 2).
+  if (s_device_type & DEVICE_TYPE_HS52) {
+    if (emmc_send_command(CMD6_SWITCH, SWITCH_ARG(EXT_CSD_HS_TIMING, EXT_CSD_HS_TIMING_HS)) == E_OK) {
+      pxEMMC->CONTROL0 |= CTRL0_HS_EN;
+      if (emmc_set_clock(50000000) == E_OK && emmc_bus_ok()) {
+        hs = 1;
+      }
+      else {
+        emmc_set_clock(25000000);
+        pxEMMC->CONTROL0 &= ~CTRL0_HS_EN;
+        emmc_send_command(CMD6_SWITCH, SWITCH_ARG(EXT_CSD_HS_TIMING, 0));
+        uart_print("emmc: HS52 verify failed, staying 25MHz\r\n");
+      }
+    }
+    else {
+      uart_print("emmc: HS_TIMING switch NAK\r\n");
+    }
+  }
+
+  // 8-bit width: switch card + host, verify via EXT_CSD read-back.
+  if (emmc_send_command(CMD6_SWITCH, SWITCH_ARG(EXT_CSD_BUS_WIDTH, EXT_CSD_BUS_WIDTH_8BIT)) == E_OK) {
+    pxEMMC->CONTROL0 = (pxEMMC->CONTROL0 & ~CTRL0_4BIT) | CTRL0_8BIT;
+    if (emmc_bus_ok()) {
+      width = 8;
+    }
+    else {
+      pxEMMC->CONTROL0 = (pxEMMC->CONTROL0 & ~CTRL0_8BIT) | CTRL0_4BIT;
+      emmc_send_command(CMD6_SWITCH, SWITCH_ARG(EXT_CSD_BUS_WIDTH, EXT_CSD_BUS_WIDTH_4BIT));
+      uart_print("emmc: 8-bit verify failed, reverted to 4-bit\r\n");
+    }
+  }
+
+  uart_printf("emmc: mode = %s, %u-bit\r\n",
+              hs ? "HS52 (50MHz)" : "legacy (25MHz)", width);
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -149,6 +261,7 @@ StatusCode emmc_init(void)
   // If a previous boot stage already initialized the controller, the SD clock
   // will be enabled and stable. Skip re-init to avoid disrupting an active card.
   if ((pxEMMC->CONTROL1 & (CTRL1_CLK_EN | CTRL1_CLK_STABLE)) == (CTRL1_CLK_EN | CTRL1_CLK_STABLE)) {
+    emmc_probe_capabilities();
     s_emmc_initialized = 1;
     return E_OK;
   }
@@ -220,19 +333,119 @@ StatusCode emmc_init(void)
     return E_CMD;
   }
 
-  // CMD6 SWITCH — EXT_CSD[183] = 1 (4-bit bus)
+  // Baseline: 4-bit @ 25 MHz. Always works; the negotiate step below upgrades
+  // from here (and can fall back to exactly this) after probing the device.
   if (emmc_send_command(CMD6_SWITCH, SWITCH_ARG(EXT_CSD_BUS_WIDTH, EXT_CSD_BUS_WIDTH_4BIT)) != E_OK) {
     uart_print("emmc: CMD6 failed\r\n");
     return E_CMD;
   }
-  pxEMMC->CONTROL0 |= (1u << 1);    // host: 4-bit mode
+  pxEMMC->CONTROL0 |= CTRL0_4BIT;    // host: 4-bit mode
 
   if (emmc_set_clock(25000000) != E_OK) {
     uart_print("emmc: 25MHz clock failed\r\n");
     return E_TIMED_OUT;
   }
 
+  emmc_probe_capabilities();   // reads EXT_CSD -> s_device_type, s_sec_count
+  emmc_negotiate_speed();      // upgrade to HS52 + 8-bit where supported/verified
+
   s_emmc_initialized = 1;
+  return E_OK;
+}
+
+// ---------------------------------------------------------------------------
+// ADMA2 — multi-block transfers offloaded to the controller (SDHCI Advanced DMA)
+// ---------------------------------------------------------------------------
+
+#define ADMA2_MAX_CHUNK       65536U                               // 16-bit len field
+#define ADMA2_MAX_XFER_BYTES  (EMMC_SECTOR_SIZE_APP * SECTOR_SIZE) // 8 MB (largest app)
+#define ADMA2_MAX_DESCRIPTORS ((ADMA2_MAX_XFER_BYTES / ADMA2_MAX_CHUNK) + 2U)
+
+typedef struct {
+  uint32_t attr_len;                                               // (length16 << 16) | attributes; length16 == 0 means 65536
+  uint32_t address;                                                // 32-bit buffer address (VA == PA, MMU off)
+} Adma2Desc;
+
+static Adma2Desc s_adma2_table[ADMA2_MAX_DESCRIPTORS] __attribute__((aligned(8)));
+
+// Reset the CMD + DATA circuits (not the whole host) — clears a stuck transfer
+// so a PIO retry after a failed DMA starts clean. Card selection/clock survive.
+static void emmc_reset_cmd_data(void)
+{
+  pxEMMC->CONTROL1 |= CTRL1_SRST_CMD | CTRL1_SRST_DATA;
+  uint32_t c = 10000;
+  while ((pxEMMC->CONTROL1 & (CTRL1_SRST_CMD | CTRL1_SRST_DATA)) && --c) {
+    emmc_delay_us(1);
+  }
+}
+
+// Fill the descriptor table for a contiguous buffer. Chunks into <=64 KB Tran
+// lines (each a multiple of 512, since transfers are whole sectors) and marks
+// the last line END|INT. Returns descriptor count, or 0 if too large.
+static uint32_t emmc_build_adma2_table(const void *buf, uint32_t total_bytes)
+{
+  uint32_t addr = (uint32_t)(uintptr_t)buf;
+  uint32_t remaining = total_bytes;
+  uint32_t n = 0;
+
+  while (remaining > 0) {
+    if (n >= ADMA2_MAX_DESCRIPTORS) {
+      return 0;   // too large for the static table -> caller falls back to PIO
+    }
+    uint32_t chunk = (remaining > ADMA2_MAX_CHUNK) ? ADMA2_MAX_CHUNK : remaining;
+    uint32_t len16 = (chunk == ADMA2_MAX_CHUNK) ? 0u : chunk;   // 0 encodes 65536
+
+    s_adma2_table[n].attr_len = (len16 << 16) | ADMA2_DESC_VALID | ADMA2_DESC_ACT_TRAN;
+    s_adma2_table[n].address = addr;
+
+    addr += chunk;
+    remaining -= chunk;
+    n++;
+  }
+
+  s_adma2_table[n - 1].attr_len |= ADMA2_DESC_END | ADMA2_DESC_INT;
+  return n;
+}
+
+// Run a multi-block transfer via ADMA2. ulCmd is CMD18 (read) or CMD25 (write).
+// Returns E_OK, or an error so the caller can retry the transfer in PIO.
+static StatusCode emmc_xfer_adma2(uint32_t ulCmd, uint32_t ulSector,
+                                  const void *pvBuf, uint32_t ulCount, int is_write)
+{
+  if (emmc_build_adma2_table(pvBuf, ulCount * SECTOR_SIZE) == 0) {
+    return E_INVALID_ARGS;
+  }
+
+  // Publish the descriptor table before the controller walks it.
+  __asm__ volatile ("dsb sy" ::: "memory");
+
+  pxEMMC->CONTROL0 = (pxEMMC->CONTROL0 & ~CTRL0_DMA_SELECT_MASK) | CTRL0_DMA_SELECT_ADMA2;
+  pxEMMC->ADMA_ADDRESS = (uint32_t)(uintptr_t)s_adma2_table;
+
+  uint32_t ulArg = xIsHC ? ulSector : ulSector * SECTOR_SIZE;
+  pxEMMC->BLKSIZECNT = (ulCount << 16) | SECTOR_SIZE;
+
+  if (emmc_send_command(ulCmd | TM_DMA_EN, ulArg) != E_OK) {
+    return E_CMD;
+  }
+
+  // A single wait for the whole transfer — the controller walks every descriptor
+  // itself. INT_ERROR_MASK already includes INT_ADMA_ERR, so emmc_wait_interrupt
+  // surfaces ADMA faults.
+  StatusCode st = emmc_wait_interrupt(INT_DATA_DONE, 2000u + ulCount * 2u);
+  if (st != E_OK) {
+    uart_printf("emmc: ADMA2 xfer failed st=%d ADMA_ERR=0x%08X\r\n",
+                st, pxEMMC->ADMA_ERROR);
+    return st;
+  }
+
+  if (is_write) {
+    if (emmc_wait_status(STATUS_DAT_ACTIVE, 5000) != E_OK) {
+      return E_TIMED_OUT;
+    }
+  }
+
+  __asm__ volatile ("dsb sy" ::: "memory");
   return E_OK;
 }
 
@@ -240,6 +453,16 @@ StatusCode emmc_read_blocks(uint32_t ulSector, void *pvBuf, uint32_t ulCount)
 {
   if (ulCount == 0) {
     return E_OK;
+  }
+
+  // Multi-block reads go through ADMA2 when supported; fall back to PIO on any
+  // failure (table too large, DMA error) after clearing the data circuit.
+  if (s_adma2_supported && (ulCount > 1)) {
+    if (emmc_xfer_adma2(CMD18, ulSector, pvBuf, ulCount, 0) == E_OK) {
+      return E_OK;
+    }
+    emmc_reset_cmd_data();
+    uart_print("emmc: ADMA2 read -> PIO fallback\r\n");
   }
 
   uint32_t ulArg = xIsHC ? ulSector : ulSector * SECTOR_SIZE;
@@ -289,6 +512,16 @@ StatusCode emmc_write_blocks(uint32_t ulSector, const void *pvBuf, uint32_t ulCo
     uart_printf("emmc: BLOCKED write to reserved sector %u (floor %u)\r\n",
                 ulSector, (uint32_t)EMMC_FIRMWARE_FLOOR);
     return E_INVALID_ARGS;
+  }
+
+  // Multi-block writes go through ADMA2 when supported; fall back to PIO on any
+  // failure. (The floor guard above already gated the sector for both paths.)
+  if (s_adma2_supported && (ulCount > 1)) {
+    if (emmc_xfer_adma2(CMD25, ulSector, pvBuf, ulCount, 1) == E_OK) {
+      return E_OK;
+    }
+    emmc_reset_cmd_data();
+    uart_print("emmc: ADMA2 write -> PIO fallback\r\n");
   }
 
   uint32_t ulArg = xIsHC ? ulSector : ulSector * SECTOR_SIZE;

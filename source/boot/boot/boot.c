@@ -62,7 +62,23 @@ StatusCode boot_loadApp(uint32_t app_sector)
 
   uint32_t ulSectors = BYTES_TO_SECTORS(start_pkt->fw_length);
 
+  // Time the bulk read (this is the transfer ADMA2 accelerates). CNTPCT/CNTFRQ
+  // are accessible at EL1 — startup.s enables PL1PCEN/PL1PCTEN.
+  uint32_t frq, lo, hi;
+  asm volatile ("mrc  p15, 0, %0, c14, c0, 0" : "=r" (frq));
+  asm volatile ("mrrc p15, 0, %0, %1, c14"   : "=r" (lo), "=r" (hi));
+  uint64_t t_start = ((uint64_t)hi << 32) | lo;
+
   emmc_read_blocks(app_sector + 1, (void *)APP_START_ADDR, ulSectors);
+
+  asm volatile ("mrrc p15, 0, %0, %1, c14" : "=r" (lo), "=r" (hi));
+  uint64_t t_end = ((uint64_t)hi << 32) | lo;
+
+  uint64_t bytes = (uint64_t)ulSectors * SECTOR_SIZE;
+  uint32_t us    = (frq != 0) ? (uint32_t)((t_end - t_start) * 1000000ULL / frq) : 0;
+  uint32_t kbps  = (us != 0) ? (uint32_t)(bytes * 1000000ULL / ((uint64_t)us * 1024)) : 0;
+  uart_printf("boot: loaded %u sectors (%uB) in %u us (%u KB/s)\r\n",
+              ulSectors, (uint32_t)bytes, us, kbps);
 
   uart_print("App hex dump (4 bytes = 1 ARM instruction):\r\n");
   for (uint32_t i = 0; i < 4; i += 4) {
