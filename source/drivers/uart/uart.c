@@ -153,6 +153,34 @@ void uart_dma_irq_handler(void)
   semaphore_give(&uart_dma_done);
 }
 
+// ── RX interrupt (replaces polling RX from the scheduler tick) ────────────────
+
+static UartRxHandler uart_rx_handler = NULL;
+
+void uart_rx_irq_enable(UartRxHandler handler)
+{
+  uart_rx_handler = handler;
+
+  // RX FIFO threshold stays at reset default (1/8); RTIM catches the tail so a
+  // short burst (e.g. the 4-byte DFU key) is delivered without waiting to fill.
+  UART0->ICR = ICR_ALL;                  // clear any stale latched interrupts
+  UART0->IMSC |= IMSC_RXIM | IMSC_RTIM;  // enable RX-level + RX-timeout
+  gic_enable_spi(UART_IRQ_INTID, 0x80);
+}
+
+// Called from _irq_handler on the PL011 combined interrupt (RX path only —
+// TX goes through DMA, so only RXIM/RTIM are unmasked).
+void uart_rx_irq_handler(void)
+{
+  while (!(UART0->FR & FR_RXFE)) {
+    uint8_t b = (uint8_t)(UART0->DR & 0xFF);
+    if (uart_rx_handler) {
+      uart_rx_handler(b);
+    }
+  }
+  UART0->ICR = ICR_RXIC | ICR_RTIC;   // clear the RX + timeout latches
+}
+
 void uart_tx_task(void *params)
 {
   (void)params;

@@ -33,28 +33,8 @@ static TaskControlBlock *tcb_2 = NULL;
 static TaskControlBlock *tcb_3 = NULL;
 static TaskControlBlock *tcb_4 = NULL;
 static TaskControlBlock *tcb_5 = NULL;
-static TaskControlBlock *tcb_dfu_trigger = NULL;
 
 static StatusCode ret;
-
-// Watches UART RX for the host's raw DFU trigger key. On match, sets the
-// DFU flag and reboots into the bootloader — no ack from here, only the
-// bootloader acks once it's actually ready to receive.
-void dfu_trigger_task(void *params)
-{
-  while (1) {
-    // uart_printf("dfu trigger: %d\r\n", dfu_trigger_get_val());
-    if (dfu_pending) {
-      uart_print("DFU trigger received, rebooting to bootloader\r\n");
-      __asm__ volatile ("cpsid i" ::: "memory");
-      boot_flags.dfu_requested = DFU_REQUEST;
-      boot_flags.reset_reason = RESET_REASON_SOFTWARE;
-      boot_flags.magic = BOOT_FLAGS_MAGIC;
-      enter_bootloader();
-    }
-    task_delay_ms(10);
-  }
-}
 
 void task_1_func(void *params)
 {
@@ -174,11 +154,6 @@ void kmain(void)
     uart_printf("Create task 5 failed with exit code %d\r\n", ret);
   }
 
-  ret = task_create(dfu_trigger_task, 1024, TASK_PRIORITY_5, NULL, &tcb_dfu_trigger);
-  if (ret != E_OK) {
-    uart_printf("Create dfu task failed with exit code %d\r\n", ret);
-  }
-
   // watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 3);
   // ret = watchdog_task_start();
   // if (ret != E_OK) {
@@ -194,6 +169,8 @@ void kmain(void)
   queue_init(&test_queue, 4, sizeof(uint32_t));
   semaphore_init(&shared_semaphore, 1, 1);
   dfu_trigger_reset();
+  dfu_trigger_task_start();                    // semaphore-blocked reboot task
+  uart_rx_irq_enable(dfu_trigger_feed_isr);    // RX IRQ signals the reboot task
 
   // A/B trial boot: confirm this app slot now that init succeeded.
   wdt_meta_confirm_slot();

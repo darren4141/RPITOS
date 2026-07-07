@@ -45,11 +45,14 @@ typedef struct {
 #define CR_UARTEN           (1 << 0) // UART enable
 
 // IMSC — interrupt masks
-#define IMSC_RXIM           (1 << 4) // RX interrupt mask
+#define IMSC_RXIM           (1 << 4) // RX FIFO ≥ threshold interrupt mask
 #define IMSC_TXIM           (1 << 5) // TX interrupt mask
+#define IMSC_RTIM           (1 << 6) // RX timeout interrupt mask (catches FIFO tail)
 
-// ICR — interrupt clear
+// ICR — interrupt clear (write 1 to clear)
 #define ICR_ALL             0x7FF    // clear all interrupts
+#define ICR_RXIC            (1 << 4) // clear RX interrupt
+#define ICR_RTIC            (1 << 6) // clear RX timeout interrupt
 
 // DMACR — DMA control
 #define DMACR_RXDMAE        (1 << 0) // RX DMA enable
@@ -63,6 +66,11 @@ typedef struct {
 // DMA Lite channel used for UART TX. If this changes, update the matching
 // `cmp r2, #119` dispatch in startup.s (INTID = 112 + channel).
 #define UART_DMA_TX_CHANNEL 7
+
+// PL011 UART0 combined interrupt → GIC INTID on BCM2711.
+// Legacy VC IRQ 57 → GIC SPI 121 → INTID (96 + 57) = 153. If this changes,
+// update the matching `cmp r2, #153` dispatch in startup.s.
+#define UART_IRQ_INTID      153
 
 // Compile-time TX path selector (full mode only). 1 = DMA-driven TX, 0 = classic
 // byte-by-byte PIO drain. Build the baseline with -DUART_TX_DMA=0 to A/B the save.
@@ -102,6 +110,13 @@ void uart_tx_raw(uint8_t byte);
 StatusCode uart_task_start(void);
 void uart_send_byte(uint8_t byte);
 void uart_dma_irq_handler(void);   // called from _irq_handler on DMA TX completion
+
+// Per-byte RX callback, invoked from IRQ context for each received byte.
+typedef void (*UartRxHandler)(uint8_t byte);
+// Enable the PL011 RX + RX-timeout interrupt and register the handler. Requires
+// gic_init() to have run. Replaces polling RX from the scheduler tick.
+void uart_rx_irq_enable(UartRxHandler handler);
+void uart_rx_irq_handler(void);    // called from _irq_handler on UART RX
 #if UART_TX_TIMING
 void uart_tx_timing_report(void);  // snapshot + print accumulated TX timing
 void uart_tx_timing_reset(void);   // zero the accumulators

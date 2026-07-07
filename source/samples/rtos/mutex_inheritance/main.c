@@ -64,24 +64,6 @@ static const uint32_t hz = 1000;
 static TaskControlBlock *tcb_low = NULL;
 static TaskControlBlock *tcb_mid = NULL;
 static TaskControlBlock *tcb_high = NULL;
-static TaskControlBlock *tcb_dfu = NULL;
-
-void dfu_trigger_task(void *params)
-{
-  (void)params;
-  while (1) {
-    if (dfu_pending) {
-      uart_print(".\r\n");
-      uart_print("DFU trigger received, rebooting to bootloader\r\n");
-      __asm__ volatile ("cpsid i" ::: "memory");
-      boot_flags.dfu_requested = DFU_REQUEST;
-      boot_flags.reset_reason = RESET_REASON_SOFTWARE;
-      boot_flags.magic = BOOT_FLAGS_MAGIC;
-      enter_bootloader();
-    }
-    task_delay_ms(10);
-  }
-}
 
 // LOW (priority 1): holds the mutex and busy-spins, printing its live priority
 // every PRINT_MS ms so the boost from HIGH is visible in the output.
@@ -193,7 +175,6 @@ void kmain(void)
   task_create(low_task, 4096, TASK_PRIORITY_1, NULL, &tcb_low);
   task_create(mid_task, 2048, TASK_PRIORITY_2, NULL, &tcb_mid);
   task_create(high_task, 2048, TASK_PRIORITY_3, NULL, &tcb_high);
-  task_create(dfu_trigger_task, 2048, TASK_PRIORITY_5, NULL, &tcb_dfu);
 
   watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
   watchdog_task_start();
@@ -201,6 +182,8 @@ void kmain(void)
   gic_init();
   gentimer_init(&clk_freq, hz);
   dfu_trigger_reset();
+  dfu_trigger_task_start();                    // semaphore-blocked reboot task
+  uart_rx_irq_enable(dfu_trigger_feed_isr);    // RX IRQ signals the reboot task
 
   // A/B trial boot: confirm this app slot now that init succeeded.
   wdt_meta_confirm_slot();

@@ -148,6 +148,11 @@ _irq_handler:
     cmp r2, #119
     beq dma_dispatch$
 
+    @ GIC ID 153 = PL011 UART0 combined IRQ — RX byte(s) available.
+    @ Must match UART_IRQ_INTID in uart.h.
+    cmp r2, #153
+    beq uart_rx_dispatch$
+
     b irq_eoi$
 
 cntx_switch$:
@@ -178,6 +183,12 @@ irq_done$:
 dma_dispatch$:
     cps  #0x12                   @ IRQ mode — run the C handler on the IRQ stack
     bl   uart_dma_irq_handler    @ W1C the DMA INT latch + give the done semaphore
+    cps  #0x13                   @ back to SVC mode
+    b    irq_eoi$                @ EOI writes the saved IAR (r4) to GICC_EOIR
+
+uart_rx_dispatch$:
+    cps  #0x12                   @ IRQ mode — run the C handler on the IRQ stack
+    bl   uart_rx_irq_handler     @ drain RX FIFO + feed the registered handler
     cps  #0x13                   @ back to SVC mode
     b    irq_eoi$                @ EOI writes the saved IAR (r4) to GICC_EOIR
 
