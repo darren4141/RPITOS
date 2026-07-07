@@ -1,6 +1,7 @@
 #include "boot_flags.h"
 #include "delay.h"
 #include "dfu_trigger.h"
+#include "dma.h"
 #include "gentimer.h"
 #include "gic.h"
 #include "gpio.h"
@@ -144,7 +145,6 @@ void kmain(void)
 
   scheduler_init(&clk_freq, hz, &tick_count);
 
-  uart_task_start();
 
   uart_print("Starting main...\r\n");
 
@@ -192,6 +192,9 @@ void kmain(void)
   queue_init(&test_queue, 4, sizeof(uint32_t));
   semaphore_init(&shared_semaphore, 1, 1);
   dfu_trigger_reset();
+
+  dma_selftest(7);
+  uart_task_start();
   watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 3);
   watchdog_set_confirm_slot_timing(2000);
   watchdog_task_start();

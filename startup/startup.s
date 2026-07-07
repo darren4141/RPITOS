@@ -143,10 +143,10 @@ _irq_handler:
     cmp r2, #30
     beq cntx_switch$
 
-    @ Other IRQ comparisons and handlers go here
-
-    @
-    @
+    @ GIC ID 119 = DMA channel 7 (SPI 87) — UART TX DMA complete.
+    @ Must match UART_DMA_TX_CHANNEL in uart.h (INTID = 112 + channel).
+    cmp r2, #119
+    beq dma_dispatch$
 
     b irq_eoi$
 
@@ -174,6 +174,12 @@ irq_eoi$:
 irq_done$:
     pop  {r0-r12, lr}            @ restore r0–r12 and the task's own lr_svc
     rfeia sp!
+
+dma_dispatch$:
+    cps  #0x12                   @ IRQ mode — run the C handler on the IRQ stack
+    bl   uart_dma_irq_handler    @ W1C the DMA INT latch + give the done semaphore
+    cps  #0x13                   @ back to SVC mode
+    b    irq_eoi$                @ EOI writes the saved IAR (r4) to GICC_EOIR
 
 
 _secondary_hang$:

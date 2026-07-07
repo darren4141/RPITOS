@@ -6,6 +6,8 @@
 #include <stdint.h>
 
 #ifndef UART_MINIMAL
+#include "dma.h"
+#include "gic.h"
 #include "interrupts.h"
 #include "semaphore.h"
 #include "task.h"
@@ -97,7 +99,7 @@ void uart_drain(void)
 
 void uart_deinit()
 {
-  uart_drain();  // wait for TX FIFO before touching control registers
+  uart_drain();   // wait for TX FIFO before touching control registers
 
   UART0->CR &= ~(CR_UARTEN | CR_TXE | CR_RXE);
   UART0->LCRH &= ~LCRH_FEN;
@@ -111,23 +113,77 @@ void uart_deinit()
 // ── Full mode: ring-buffer TX + scheduler task ────────────────────────────────
 #ifndef UART_MINIMAL
 
-static Semaphore uart_data_ready;
-static volatile uint8_t uart_buf[UART_BUFFER_SIZE];
-static volatile uint16_t p_uart_buf_left = 0;
-static volatile uint16_t p_uart_buf_right = 0;
+static Semaphore uart_data_ready;              // producers → task: bytes queued
+static Semaphore uart_dma_done;                // DMA IRQ → task: transfer complete
+// One byte per 32-bit slot. The legacy DMA has no byte-width transfer mode, and
+// a 32-bit write to the PL011 DR only latches bits [7:0] — so a packed byte
+// buffer would transmit only every 4th byte. Packing one byte per word makes
+// each DREQ-paced word-write emit exactly one byte.
+static volatile uint32_t uart_buf[UART_BUFFER_SIZE];
+static volatile uint16_t p_uart_buf_left = 0;   // index of last byte consumed
+static volatile uint16_t p_uart_buf_right = 0;  // index of last byte produced
 
 static TaskControlBlock *uart_tcb = NULL;
 static bool uart_task_started = false;
+
+#if UART_TX_DMA
+static DmaControlBlock_t uart_tx_cb __attribute__((aligned(32)));
+
+// Launch one DMA transfer of `len` bytes (one word per byte) from the ring
+// buffer to UART0->DR, paced by the UART TX DREQ. The span must be contiguous.
+static void uart_dma_tx_run(const volatile uint32_t *buf, uint16_t len)
+{
+  uart_tx_cb.ti = DMA_TI_INTEN | DMA_TI_WAIT_RESP | DMA_TI_DEST_DREQ
+                  | DMA_TI_SRC_INC | DMA_TI_PERMAP(DMA_DREQ_UART_TX);
+  uart_tx_cb.source_ad = BUS_ADDRESS(buf);
+  uart_tx_cb.dest_ad = UART0_DR_BUS;
+  uart_tx_cb.txfr_len = (uint32_t)len * 4U;   // 32-bit beats: one word = one byte
+  uart_tx_cb.stride = 0;
+  uart_tx_cb.nextconbk = 0;
+  dma_start(UART_DMA_TX_CHANNEL, &uart_tx_cb);
+}
+#endif
+
+// Called from _irq_handler when the TX DMA channel raises its completion IRQ.
+void uart_dma_irq_handler(void)
+{
+  volatile DmaChannelRegs_t *ch = DMA_CHANNEL(UART_DMA_TX_CHANNEL);
+  ch->CS = DMA_CS_INT;   // write-1-to-clear the channel interrupt latch
+  __asm__ volatile ("dsb sy" ::: "memory");
+  semaphore_give(&uart_dma_done);
+}
 
 void uart_tx_task(void *params)
 {
   (void)params;
   while (1) {
     semaphore_take(&uart_data_ready, SEMAPHORE_TAKE_BLOCKING);
+
+#if UART_TX_DMA
+    // Drain the ring buffer one contiguous run at a time. A run reaches from the
+    // first unconsumed byte to either the write head or the end of the array
+    // (whichever comes first) — DMA needs a linear span, so wraps split in two.
     while (p_uart_buf_right != p_uart_buf_left) {
-      p_uart_buf_left = (p_uart_buf_left + 1) % UART_BUFFER_SIZE;
-      uart_tx_raw(uart_buf[p_uart_buf_left]);
+      uint16_t left = p_uart_buf_left;
+      uint16_t start = (left + 1) % UART_BUFFER_SIZE;
+      uint16_t avail = (uint16_t)((p_uart_buf_right - left + UART_BUFFER_SIZE) % UART_BUFFER_SIZE);
+      uint16_t run = avail;
+      if ((uint32_t)start + run > UART_BUFFER_SIZE) {
+        run = (uint16_t)(UART_BUFFER_SIZE - start);
+      }
+
+      uart_dma_tx_run(&uart_buf[start], run);
+      semaphore_take(&uart_dma_done, SEMAPHORE_TAKE_BLOCKING);
+
+      p_uart_buf_left = (uint16_t)((left + run) % UART_BUFFER_SIZE);
     }
+#else
+    // Baseline: classic byte-by-byte PIO drain (spins on FR_TXFF per byte).
+    while (p_uart_buf_right != p_uart_buf_left) {
+      p_uart_buf_left = (uint16_t)((p_uart_buf_left + 1) % UART_BUFFER_SIZE);
+      uart_tx_raw((uint8_t)uart_buf[p_uart_buf_left]);
+    }
+#endif
   }
 }
 
@@ -140,6 +196,14 @@ StatusCode uart_init(UartBaudrate baudrate)
 StatusCode uart_task_start(void)
 {
   semaphore_init(&uart_data_ready, 1, 0);
+  semaphore_init(&uart_dma_done, 1, 0);
+
+#if UART_TX_DMA
+  UART0->DMACR = DMACR_TXDMAE;                          // gate TX DREQ to the DMA
+  dma_channel_init(UART_DMA_TX_CHANNEL);
+  gic_enable_spi(DMA_IRQ_INTID(UART_DMA_TX_CHANNEL), 0x80);
+#endif
+
   StatusCode ret = task_create(uart_tx_task, 2048, TASK_PRIORITY_5, NULL, &uart_tcb);
   if (ret == E_OK) {
     uart_task_started = true;
