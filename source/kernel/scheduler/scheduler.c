@@ -368,13 +368,6 @@ void task_delay_until_ms(uint64_t *last_wake_time, uint64_t period)
 // Scheduler tick handler, resets timer, increments global tick_count, and checks to unblock tasks
 void __attribute__((noinline)) timer_tick_handler(void)
 {
-  uint8_t b;
-  if (uart_rx_nonblocking(&b) == E_OK) {
-    if (dfu_trigger_feed(b)) {
-      dfu_pending = 1;
-    }
-  }
-
   // Rearm relative to the current physical counter (CNTPCT) in case any systicks got skipped
   uint32_t lo, hi;
   __asm__ volatile ("mrrc p15, 0, %0, %1, c14" : "=r" (lo), "=r" (hi));         // CNTPCT read
