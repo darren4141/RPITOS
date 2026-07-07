@@ -7,6 +7,8 @@
 #define GICD_CTLR      (0x000 / 4)
 #define GICD_ISENABLER(n)     ((0x100 + (n) * 4) / 4)
 #define GICD_IPRIORITYR(n)    ((0x400 + (n) * 4) / 4)
+#define GICD_ITARGETSR(n)     ((0x800 + (n) * 4) / 4)
+#define GICD_ICFGR(n)         ((0xC00 + (n) * 4) / 4)
 
 #define GICC_CTLR      (0x000 / 4)
 #define GICC_PMR       (0x004 / 4)
@@ -52,6 +54,33 @@ void gic_init(void)
   // GICC_IAR to dispatch the timer.  No GICC_IAR/GICC_EOIR needed for this
   // path — the interrupt de-asserts automatically once CNTP_CVAL > CNTPCT.
   CORE_TIMER_IRQCNTL(0) |= (1 << 1);   // nCNTPNSIRQ → Core0 IRQ
+
+  __asm__ volatile ("dsb sy" ::: "memory");
+}
+
+void gic_enable_spi(uint32_t intid, uint8_t priority)
+{
+  volatile uint32_t *gicd = (volatile uint32_t *)GICD_BASE;
+
+  // Priority — one byte per INTID.
+  uint32_t pri_reg = intid / 4;
+  uint32_t pri_shift = (intid % 4) * 8;
+  gicd[GICD_IPRIORITYR(pri_reg)] =
+    (gicd[GICD_IPRIORITYR(pri_reg)] & ~(0xFFU << pri_shift)) | ((uint32_t)priority << pri_shift);
+
+  // Target — one byte per INTID; route to core 0 (bit 0). RW for SPIs only.
+  uint32_t tgt_reg = intid / 4;
+  uint32_t tgt_shift = (intid % 4) * 8;
+  gicd[GICD_ITARGETSR(tgt_reg)] =
+    (gicd[GICD_ITARGETSR(tgt_reg)] & ~(0xFFU << tgt_shift)) | (0x01U << tgt_shift);
+
+  // Trigger — two bits per INTID; 0b00 = level-sensitive (DMA INT is level high).
+  uint32_t cfg_reg = intid / 16;
+  uint32_t cfg_shift = (intid % 16) * 2;
+  gicd[GICD_ICFGR(cfg_reg)] &= ~(0x3U << cfg_shift);
+
+  // Enable — one bit per INTID.
+  gicd[GICD_ISENABLER(intid / 32)] = (1U << (intid % 32));
 
   __asm__ volatile ("dsb sy" ::: "memory");
 }
