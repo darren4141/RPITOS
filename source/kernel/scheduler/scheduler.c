@@ -10,6 +10,16 @@ static List ready_list[NUM_TASK_PRIORITIES];
 
 static List blocked_task_list;
 
+// Software-timer tick hook. software_timer.c provides the strong definition;
+// samples that do not link the software-timer module fall back to this weak
+// no-op, so the shared scheduler stays resolvable without forcing every sample
+// to pull in software_timer.o.
+void software_timer_tick(uint64_t now_tick);
+__attribute__((weak)) void software_timer_tick(uint64_t now_tick)
+{
+  (void)now_tick;
+}
+
 TaskControlBlock *p_task_control_block = NULL;    // global — visible to assembly
 
 static volatile uint32_t *s_clk_freq;
@@ -423,6 +433,10 @@ void __attribute__((noinline)) timer_tick_handler(void)
 
     addToReadyList(&tcb);
   }
+
+  // Expire software timers: move any due timers to the active list and signal
+  // the software-timer service task once per expiry.
+  software_timer_tick(*s_tick_count);
 
   if ((*s_tick_count) % 5000 == 0) {
     uart_print("heartbeat\r\n");
