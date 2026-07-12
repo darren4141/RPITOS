@@ -49,7 +49,7 @@ static void software_timer_add_to_blocked_list(SoftwareTimer *software_timer)
   software_timer->list_id = TIMER_LIST_BLOCKED;
   software_timer->next = NULL;
 
-  if (blocked_list_head == NULL || software_timer->expiry_tick < blocked_list_head->expiry_tick) {
+  if ((blocked_list_head == NULL) || (software_timer->expiry_tick < blocked_list_head->expiry_tick)) {
     software_timer->next = blocked_list_head;
     blocked_list_head = software_timer;
     return;
@@ -120,7 +120,7 @@ StatusCode software_timer_init()
   blocked_list_head = NULL;
   active_list_head = NULL;
 
-  semaphore_init(&software_timer_semaphore, 64U, 0U);
+  semaphore_init(&software_timer_semaphore, SEMAPHORE_MAX_COUNT_UNLIMITED, 0U);
 
   return E_OK;
 }
@@ -139,7 +139,7 @@ StatusCode software_timer_start()
 
 StatusCode software_timer_create(SoftwareTimer *software_timer, uint64_t period, TimerCallback callback_function, TimerMode timer_mode)
 {
-  if (software_timer == NULL || period == 0) {
+  if ((software_timer == NULL) || (period == 0)) {
     return E_INVALID_ARGS;
   }
 

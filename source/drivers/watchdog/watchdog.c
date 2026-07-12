@@ -9,6 +9,7 @@
 
 #ifndef WATCHDOG_MINIMAL
 #include "scheduler.h"
+#include "software_timer.h"
 #include "task.h"
 #endif
 
@@ -167,7 +168,7 @@ void watchdog_trigger_reset(void)
 
 static int64_t s_confirm_delay_ms = 0;
 static TaskControlBlock *s_watchdog_kick_tcb = NULL;
-static TaskControlBlock *s_watchdog_confirm_tcb = NULL;
+static SoftwareTimer s_confirm_timer;
 
 static void watchdog_kick_task(void *params)
 {
@@ -178,21 +179,18 @@ static void watchdog_kick_task(void *params)
   }
 }
 
-static void watchdog_confirm_task(void *params)
+// One-shot software timer callback: once the confirm delay elapses, confirm the
+// active A/B app slot exactly once so the bootloader will not roll it back.
+static void watchdog_confirm_timer_cb(void *arg)
 {
-  (void)params;
-
-  task_delay_ms(s_confirm_delay_ms);
+  (void)arg;
   wdt_meta_confirm_slot();
-
-  while (1) {
-    task_delay_ms(60000);
-  }
 }
 
 StatusCode watchdog_set_confirm_slot_timing(uint64_t new_time_ms)
 {
-  s_confirm_delay_ms = new_time_ms;
+  s_confirm_delay_ms = (int64_t)new_time_ms;
+  return E_OK;
 }
 
 StatusCode watchdog_task_start(void)
@@ -205,7 +203,19 @@ StatusCode watchdog_task_start(void)
   }
 
   if (s_confirm_delay_ms >= 0) {
-    ret = task_create(watchdog_confirm_task, 512, TASK_PRIORITY_1, NULL, &s_watchdog_confirm_tcb);
+    // A zero delay confirms on the first scheduler tick, matching the old
+    // task_delay_ms(0) behaviour. watchdog_task_start() runs before the
+    // scheduler starts, so software_timer_create() will not auto-arm the timer;
+    // software_timer_reset() arms it explicitly from the current tick.
+    // Requires software_timer_init()/software_timer_start() to have run first.
+    uint64_t delay = (s_confirm_delay_ms > 0) ? (uint64_t)s_confirm_delay_ms : 1U;
+
+    ret = software_timer_create(&s_confirm_timer, delay, watchdog_confirm_timer_cb, TIMER_MODE_ONE_SHOT);
+    if (ret != E_OK) {
+      return ret;
+    }
+
+    ret = software_timer_reset(&s_confirm_timer);
     if (ret != E_OK) {
       return ret;
     }

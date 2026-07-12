@@ -6,8 +6,9 @@
 
 typedef struct Semaphore Semaphore;
 
-#define SEMAPHORE_TAKE_BLOCKING   -1
-#define SEMAPHORE_TAKE_NO_TIMEOUT 0U
+#define SEMAPHORE_TAKE_BLOCKING       -1
+#define SEMAPHORE_TAKE_NO_TIMEOUT     0U
+#define SEMAPHORE_MAX_COUNT_UNLIMITED 0xFFFFFFFFU
 
 struct Semaphore {
   uint32_t max_count;
