@@ -32,6 +32,8 @@ typedef enum {
 
 #define WDT_META_MAGIC              0xB007DA7AU
 
+#define WDT_KICK_PERIOD             2000U
+
 // A/B trial: after a DFU flips the active app slot, the new slot boots "on
 // trial". The application must call wdt_meta_confirm_slot() once it reaches a
 // known-good state. If it does not, each bootloader re-entry increments

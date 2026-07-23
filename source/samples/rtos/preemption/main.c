@@ -7,6 +7,7 @@
 #include "mutex.h"
 #include "reset.h"
 #include "scheduler.h"
+#include "software_timer.h"
 #include "task.h"
 #include "uart.h"
 #include "watchdog.h"
@@ -106,6 +107,9 @@ void kmain(void)
   task_create(low_task, 2048, TASK_PRIORITY_1, NULL, &tcb_low);
   task_create(mid_task, 2048, TASK_PRIORITY_2, NULL, &tcb_mid);
   task_create(high_task, 2048, TASK_PRIORITY_3, NULL, &tcb_high);
+
+  software_timer_init();
+  software_timer_start();
 
   watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
   watchdog_task_start();

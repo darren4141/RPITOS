@@ -6,6 +6,7 @@
     "rtos/full_demo",
     "rtos/heavy_overlap",
     "rtos/preemption",
-    "rtos/mutex_inheritance"
+    "rtos/mutex_inheritance",
+    "rtos/software_timer"
   ]
 }
