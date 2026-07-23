@@ -136,7 +136,7 @@ static void spawner_task(void *params)
       uart_print("[spawn] pool full — waiting for one-shots to fire\r\n");
     }
 
-    task_delay_ms(200U);
+    task_delay_ms(2000U);
   }
 }
 
@@ -151,11 +151,11 @@ static void demo_task(void *params)
 
   uart_print("[demo] arming software timers...\r\n");
 
-  software_timer_create(&heartbeat_timer, 250U,  heartbeat_cb, TIMER_MODE_PERIODIC);
-  software_timer_create(&fast_timer,      500U,  fast_cb,      TIMER_MODE_PERIODIC);
-  software_timer_create(&medium_timer,    1000U, medium_cb,    TIMER_MODE_PERIODIC);
-  software_timer_create(&slow_timer,      2000U, slow_cb,      TIMER_MODE_PERIODIC);
-  software_timer_create(&oneshot_timer,   5000U, oneshot_cb,   TIMER_MODE_ONE_SHOT);
+  software_timer_create(&heartbeat_timer, 250U, heartbeat_cb, TIMER_MODE_PERIODIC);
+  software_timer_create(&fast_timer, 500U, fast_cb, TIMER_MODE_PERIODIC);
+  software_timer_create(&medium_timer, 1000U, medium_cb, TIMER_MODE_PERIODIC);
+  software_timer_create(&slow_timer, 2000U, slow_cb, TIMER_MODE_PERIODIC);
+  software_timer_create(&oneshot_timer, 5000U, oneshot_cb, TIMER_MODE_ONE_SHOT);
 
   uart_print("[demo] all five timers armed\r\n");
 

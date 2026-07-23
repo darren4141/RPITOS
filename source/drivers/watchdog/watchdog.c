@@ -163,20 +163,16 @@ void watchdog_trigger_reset(void)
   while (1) {}
 }
 
-// ── Kick task (excluded in WATCHDOG_MINIMAL builds) ──────────────────────────
+// ── Kick software timer (excluded in WATCHDOG_MINIMAL builds) ──────────────────────────
 #ifndef WATCHDOG_MINIMAL
 
 static int64_t s_confirm_delay_ms = 0;
-static TaskControlBlock *s_watchdog_kick_tcb = NULL;
+static SoftwareTimer s_watchdog_kick_timer;
 static SoftwareTimer s_confirm_timer;
 
-static void watchdog_kick_task(void *params)
+static void watchdog_kick_cb(void *params)
 {
-  (void)params;
-  while (1) {
-    watchdog_kick();
-    task_delay_ms(2000);
-  }
+  watchdog_kick();
 }
 
 // One-shot software timer callback: once the confirm delay elapses, confirm the
@@ -197,10 +193,6 @@ StatusCode watchdog_task_start(void)
 {
   StatusCode ret;
 
-  ret = task_create(watchdog_kick_task, 512, TASK_PRIORITY_1, NULL, &s_watchdog_kick_tcb);
-  if (ret != E_OK) {
-    return ret;
-  }
 
   if (s_confirm_delay_ms >= 0) {
     // A zero delay confirms on the first scheduler tick, matching the old
@@ -210,7 +202,17 @@ StatusCode watchdog_task_start(void)
     // Requires software_timer_init()/software_timer_start() to have run first.
     uint64_t delay = (s_confirm_delay_ms > 0) ? (uint64_t)s_confirm_delay_ms : 1U;
 
+    ret = software_timer_create(&s_watchdog_kick_timer, WDT_KICK_PERIOD, watchdog_kick_cb, TIMER_MODE_PERIODIC);
+    if (ret != E_OK) {
+      return ret;
+    }
+
     ret = software_timer_create(&s_confirm_timer, delay, watchdog_confirm_timer_cb, TIMER_MODE_ONE_SHOT);
+    if (ret != E_OK) {
+      return ret;
+    }
+
+    ret = software_timer_reset(&s_watchdog_kick_timer);
     if (ret != E_OK) {
       return ret;
     }
