@@ -55,6 +55,15 @@ typedef struct StartPacket {
   uint32_t crc;
 } StartPacket;
 
+// Fixed-offset marker proving an app image was built with the standard rpitos
+// startup — and therefore links the DFU-trigger support that lets the running
+// app be recovered into DFU. Emitted by startup/startup.s as a `.word` right
+// after the 8-entry vector table; dfu_receive refuses to commit an app slot
+// whose first firmware sector doesn't carry it.
+// KEEP THE VALUE AND OFFSET IN SYNC with the `.word` in startup/startup.s.
+#define DFU_APP_MAGIC          0x44465521U   // 'D' 'F' 'U' '!'
+#define DFU_APP_MARKER_OFFSET  0x20U         // 8 vector entries * 4 bytes
+
 StatusCode dfu_init();
 StatusCode dfu_receive();
 

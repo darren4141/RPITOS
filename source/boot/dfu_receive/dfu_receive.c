@@ -307,6 +307,19 @@ StatusCode dfu_receive()
         break;
       }
 
+      // Enforce that the image was built with the standard app startup (and so
+      // links the DFU-trigger support). The marker sits at a fixed offset in
+      // the app's vector-table region, i.e. the first firmware sector. Read it
+      // back from eMMC rather than trusting the in-flight stream.
+      uint8_t marker_sector[SECTOR_SIZE] __attribute__((aligned(4)));
+      if (emmc_read_blocks(APP_SLOT_TO_SECTOR(new_slot) + 1U, marker_sector, 1U) != E_OK ||
+          *(const uint32_t *)&marker_sector[DFU_APP_MARKER_OFFSET] != DFU_APP_MAGIC) {
+        uart_print("DFU: image missing DFU-support marker, refusing to commit\r\n");
+        uart_tx_raw(DFU_NACK);
+        state = DFU_STATE_ABORT;   // active slot untouched — nothing to roll back
+        break;
+      }
+
       // Commit: make the new slot active but mark it on-trial. The app must call
       // wdt_meta_confirm_slot() once healthy, or the bootloader rolls back.
       wdt_meta.active_app_slot = new_slot;

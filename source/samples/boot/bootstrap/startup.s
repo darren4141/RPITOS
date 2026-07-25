@@ -42,6 +42,17 @@ _reset_handler:
 
 _stack_setup:
 
+    @ ---- Disable D-cache, I-cache, alignment checking (must be in SVC mode) ----
+    @ GPU firmware may leave SCTLR.A (bit 1) set; clear it so unaligned accesses
+    @ are handled by the core rather than faulting.
+    mrc  p15, 0, r0, c1, c0, 0
+    bic  r0, r0, #(1 << 1)        @ A: alignment check off
+    bic  r0, r0, #(1 << 2)        @ C: D-cache off
+    bic  r0, r0, #(1 << 12)       @ I: I-cache off
+    bic  r0, r0, #(1 << 13)       @ V: high vectors off (VBAR used instead)
+    mcr  p15, 0, r0, c1, c0, 0
+    dsb
+    isb
 
     @ ---- Banked stacks ----
     msr cpsr_c, #0xD1
@@ -81,7 +92,7 @@ zero_bss$:
 hang$:
     b hang$
 
-@ Stub handlers — bootloader does not use interrupts
+@ Stub handlers — bootstrap does not use interrupts
 _undef_handler:     b _undef_handler
 _svc_handler:       b _svc_handler
 _prefetch_handler:  b _prefetch_handler

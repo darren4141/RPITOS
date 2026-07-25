@@ -14,6 +14,13 @@ _start:
     b _irq_handler               @ 0x18 IRQ
     b _fiq_handler               @ 0x1C FIQ
 
+    @ DFU-support marker at image offset 0x20 (just past the 8-entry vector
+    @ table). Proves this app was built with the standard rpitos startup, so
+    @ the bootloader's dfu_receive will accept it. Reached only as data — the
+    @ reset vector above branches over it to _reset_handler.
+    @ KEEP IN SYNC with DFU_APP_MAGIC in source/boot/dfu_receive/dfu_receive.h.
+    .word 0x44465521             @ 0x20  'D' 'F' 'U' '!'
+
 _reset_handler:
 
     @ ---- Park secondary cores immediately ----
@@ -139,21 +146,18 @@ _irq_handler:
     cmp  r2, r3                 @ ID == 0x3FF? spurious
     beq  irq_done$
 
-    @ Dispatch — GIC ID 30 = nCNTPNSIRQ (EL1 non-secure physical timer)
+    @ GIC ID 30 = nCNTPNSIRQ (EL1 non-secure physical timer). The context switch
+    @ stays in asm — it saves/restores SP directly and can't go through C.
     cmp r2, #30
     beq cntx_switch$
 
-    @ GIC ID 119 = DMA channel 7 (SPI 87) — UART TX DMA complete.
-    @ Must match UART_DMA_TX_CHANNEL in uart.h (INTID = 112 + channel).
-    cmp r2, #119
-    beq dma_dispatch$
-
-    @ GIC ID 153 = PL011 UART0 combined IRQ — RX byte(s) available.
-    @ Must match UART_IRQ_INTID in uart.h.
-    cmp r2, #153
-    beq uart_rx_dispatch$
-
-    b irq_eoi$
+    @ Every other INTID goes through the C dispatch table (irq_register). DMA TX
+    @ (119) and UART RX (153) are registered there at driver init.
+    cps  #0x12                   @ IRQ mode — run the C handler on the IRQ stack
+    mov  r0, r2                  @ r0 = intid (r0-r7 not banked, survives the cps)
+    bl   irq_dispatch
+    cps  #0x13                   @ back to SVC mode
+    b    irq_eoi$
 
 cntx_switch$:
     ldr r0, =p_task_control_block
@@ -179,19 +183,6 @@ irq_eoi$:
 irq_done$:
     pop  {r0-r12, lr}            @ restore r0–r12 and the task's own lr_svc
     rfeia sp!
-
-dma_dispatch$:
-    cps  #0x12                   @ IRQ mode — run the C handler on the IRQ stack
-    bl   uart_dma_irq_handler    @ W1C the DMA INT latch + give the done semaphore
-    cps  #0x13                   @ back to SVC mode
-    b    irq_eoi$                @ EOI writes the saved IAR (r4) to GICC_EOIR
-
-uart_rx_dispatch$:
-    cps  #0x12                   @ IRQ mode — run the C handler on the IRQ stack
-    bl   uart_rx_irq_handler     @ drain RX FIFO + feed the registered handler
-    cps  #0x13                   @ back to SVC mode
-    b    irq_eoi$                @ EOI writes the saved IAR (r4) to GICC_EOIR
-
 
 _secondary_hang$:
     wfe
