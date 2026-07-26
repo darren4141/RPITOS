@@ -193,12 +193,12 @@ void kmain(void)
 
   // Release core 1 into its bare blink loop. Safe to call before the scheduler
   // starts — it just publishes the entry and wakes the parked core.
-  // if (smp_start_core(1U, core1_blink) == E_OK) {
-  // uart_print("core 0: released core 1\r\n");
-  // }
-  // else {
-  // uart_print("core 0: smp_start_core failed\r\n");
-  // }
+  if (smp_start_core(1U, core1_blink) == E_OK) {
+    uart_print("core 0: released core 1\r\n");
+  }
+  else {
+    uart_print("core 0: smp_start_core failed\r\n");
+  }
 
   // A/B trial boot: confirm this app slot now that init succeeded.
   wdt_meta_confirm_slot();
