@@ -165,6 +165,7 @@ void uart_rx_irq_enable(UartRxHandler handler)
   // short burst (e.g. the 4-byte DFU key) is delivered without waiting to fill.
   UART0->ICR = ICR_ALL;                  // clear any stale latched interrupts
   UART0->IMSC |= IMSC_RXIM | IMSC_RTIM;  // enable RX-level + RX-timeout
+  irq_register(UART_IRQ_INTID, uart_rx_irq_handler);
   gic_enable_spi(UART_IRQ_INTID, 0x80);
 }
 
@@ -229,6 +230,7 @@ StatusCode uart_task_start(void)
 #if UART_TX_DMA
   UART0->DMACR = DMACR_TXDMAE;                          // gate TX DREQ to the DMA
   dma_channel_init(UART_DMA_TX_CHANNEL);
+  irq_register(DMA_IRQ_INTID(UART_DMA_TX_CHANNEL), uart_dma_irq_handler);
   gic_enable_spi(DMA_IRQ_INTID(UART_DMA_TX_CHANNEL), 0x80);
 #endif
 
