@@ -98,11 +98,34 @@ zero_bss$:
 hang$:
     b hang$
 
-@ Stub handlers
-_undef_handler:     b _undef_handler
+@ Fault handlers — dump PC + fault address/status over UART, then hang.
+@ AAPCS: r0=kind, r1=faulting PC, r2=fault addr, r3=fault status.
+_undef_handler:
+    mov  r0, #0
+    sub  r1, lr, #4               @ approx faulting PC (ARM)
+    mov  r2, #0
+    mov  r3, #0
+    bl   uart_fault_report
+_undef_hang$:       b _undef_hang$
+
 _svc_handler:       b _svc_handler
-_prefetch_handler:  b _prefetch_handler
-_data_handler:      b _data_handler
+
+_prefetch_handler:
+    mov  r0, #1
+    sub  r1, lr, #4               @ LR_abt = faulting PC + 4
+    mrc  p15, 0, r2, c6, c0, 2    @ IFAR
+    mrc  p15, 0, r3, c5, c0, 1    @ IFSR
+    bl   uart_fault_report
+_pref_hang$:        b _pref_hang$
+
+_data_handler:
+    mov  r0, #2
+    sub  r1, lr, #8               @ LR_abt = faulting PC + 8
+    mrc  p15, 0, r2, c6, c0, 0    @ DFAR
+    mrc  p15, 0, r3, c5, c0, 0    @ DFSR
+    bl   uart_fault_report
+_data_hang$:        b _data_hang$
+
 _reserved_handler:  b _reserved_handler
 _fiq_handler:       b _fiq_handler
 

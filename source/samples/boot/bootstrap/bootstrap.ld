@@ -36,6 +36,7 @@ SECTIONS {
 		_und_stack_bottom = .;  . += 0x200;  _und_stack_top = .;
 		_sys_stack_bottom = .;  . += 0x1000; _sys_stack_top = .;
 		_svc_stack_bottom = .;  . += 0x1000; _svc_stack_top = .;
+		_sec_stack_bottom = .;  . += 3 * 0x800; _sec_stack_top = .;  /* SVC+ABT per secondary */
 	}
 
 	/* Bootstrap must not grow into the bootloader load region at 0x10000 */

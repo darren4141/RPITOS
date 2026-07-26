@@ -106,6 +106,13 @@ void uart_drain(void);
 
 void uart_tx_raw(uint8_t byte);
 
+// Stop in-flight TX DMA + drain the FIFO so direct uart_tx_raw output is clean.
+void uart_tx_quiesce(void);
+
+// Fault-safe register-level dump for exception handlers (no scheduler/DMA).
+// kind: 0=undef, 1=prefetch abort, 2=data abort.
+void uart_fault_report(uint32_t kind, uint32_t pc, uint32_t addr, uint32_t status);
+
 #ifndef UART_MINIMAL
 StatusCode uart_task_start(void);
 void uart_send_byte(uint8_t byte);

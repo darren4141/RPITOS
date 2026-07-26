@@ -60,6 +60,50 @@ void uart_tx_raw(uint8_t byte)
   UART0->DR = byte;
 }
 
+// Stop any in-flight TX DMA and drain the FIFO so subsequent uart_tx_raw output
+// isn't interleaved (garbled) with a DMA transfer. Call before fault-safe printing.
+void uart_tx_quiesce(void)
+{
+#if UART_TX_DMA
+  volatile DmaChannelRegs_t *ch = DMA_CHANNEL(UART_DMA_TX_CHANNEL);
+  ch->CS = 0;                       // clear ACTIVE — stop the channel
+  UART0->DMACR &= ~DMACR_TXDMAE;    // stop feeding the TX DREQ from DMA
+  __asm__ volatile ("dsb sy" ::: "memory");
+#endif
+  while (UART0->FR & FR_BUSY) {}    // wait for the shift register to empty
+}
+
+// ── Fault-safe dump (uses only uart_tx_raw — safe from an abort/undef handler
+//    where the scheduler and the DMA TX task are dead) ─────────────────────────
+static void fault_puthex(uint32_t v)
+{
+  static const char hexd[] = "0123456789ABCDEF";
+  uart_tx_raw('0');
+  uart_tx_raw('x');
+  for (int i = 28; i >= 0; i -= 4) {
+    uart_tx_raw((uint8_t)hexd[(v >> i) & 0xFU]);
+  }
+}
+
+// Called from the exception vectors. kind: 0=undef, 1=prefetch abort, 2=data abort.
+// Prints PC and ADDR first, using only char writes (no .rodata string reads that
+// could themselves re-fault), so the critical values survive a fast reboot cutting
+// the line short.
+void uart_fault_report(uint32_t kind, uint32_t pc, uint32_t addr, uint32_t status)
+{
+  uart_tx_quiesce();
+  uart_tx_raw('\r'); uart_tx_raw('\n');
+  uart_tx_raw('P'); uart_tx_raw('C'); uart_tx_raw('=');
+  fault_puthex(pc);
+  uart_tx_raw(' '); uart_tx_raw('A'); uart_tx_raw('=');
+  fault_puthex(addr);
+  uart_tx_raw(' '); uart_tx_raw('S'); uart_tx_raw('=');
+  fault_puthex(status);
+  uart_tx_raw(' '); uart_tx_raw('K'); uart_tx_raw('=');
+  fault_puthex(kind);
+  uart_tx_raw('\r'); uart_tx_raw('\n');
+}
+
 uint8_t uart_rx()
 {
   while (UART0->FR & FR_RXFE) {}

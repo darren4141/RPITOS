@@ -4,11 +4,23 @@
 
 #include "dfu_trigger.h"
 #include "interrupts.h"
+#include "task.h"
 #include "uart.h"
 
 static List ready_list[NUM_TASK_PRIORITIES];
 
 static List blocked_task_list;
+
+// Fault-safe hex print for the priority-corruption report below: raw
+// uart_tx_raw only, safe from tick/IRQ context where the scheduler and the
+// DMA TX task may be in an inconsistent state.
+static void scheduler_puthex(uint32_t v)
+{
+  static const char hexd[] = "0123456789ABCDEF";
+  for (int i = 28; i >= 0; i -= 4) {
+    uart_tx_raw((uint8_t)hexd[(v >> i) & 0xFU]);
+  }
+}
 
 // Software-timer tick hook. software_timer.c provides the strong definition;
 // samples that do not link the software-timer module fall back to this weak
@@ -187,12 +199,41 @@ void schedulerSwitchContext(void)
   }
 
   // If the current task used its quantum (not blocked), mark READY and advance
-  // the round-robin index so the next task at the same priority runs next tick
+  // the round-robin index so the next task at the same priority runs next tick.
+  // priority must be bounds-checked before indexing ready_list — addToReadyList()
+  // already does this (returns E_INVALID_ARGS), but this call site read
+  // p_task_control_block->priority directly with no check: a corrupted priority
+  // turned into an out-of-bounds ready_list[] access and an unbounded write
+  // through list->index on every subsequent tick.
   if ((p_task_control_block != NULL) && (p_task_control_block->currentState == TASK_STATE_RUNNING)) {
-    p_task_control_block->currentState = TASK_STATE_READY;
-    List *list = &ready_list[p_task_control_block->priority];
-    if (list->index != NULL) {
-      list->index = (list->index->next != NULL) ? list->index->next : list->head;
+    if (p_task_control_block->priority >= NUM_TASK_PRIORITIES) {
+      // Report everything we can about the corrupted task instead of silently
+      // hanging or writing through garbage — this is the first point in the
+      // whole cascade where the corruption is actually detected, so this dump
+      // is the best chance of ever seeing it before it propagates further.
+      uart_tx_quiesce();
+      uart_print("\r\n*** SCHEDULER: corrupted priority tcb=0x");
+      scheduler_puthex((uint32_t)(uintptr_t)p_task_control_block);
+      uart_print(" priority=0x");
+      scheduler_puthex((uint32_t)p_task_control_block->priority);
+      uart_print(" taskId=0x");
+      scheduler_puthex((uint32_t)p_task_control_block->taskId);
+      uart_print(" p_Stack=0x");
+      scheduler_puthex((uint32_t)(uintptr_t)p_task_control_block->p_Stack);
+      uart_print(" currentState=0x");
+      scheduler_puthex((uint32_t)p_task_control_block->currentState);
+      uart_print("\r\n");
+      // Recover: skip only the round-robin advance (never touch
+      // ready_list[garbage]). The task keeps running at whatever priority the
+      // "pick next task" loop below finds it at — that loop only ever indexes
+      // 0..NUM_TASK_PRIORITIES-1, so it's safe regardless of this corruption.
+    }
+    else {
+      p_task_control_block->currentState = TASK_STATE_READY;
+      List *list = &ready_list[p_task_control_block->priority];
+      if (list->index != NULL) {
+        list->index = (list->index->next != NULL) ? list->index->next : list->head;
+      }
     }
   }
 
@@ -391,6 +432,9 @@ void __attribute__((noinline)) timer_tick_handler(void)
 
   (*s_tick_count)++;
 
+  // Catch a task stack overflow before we walk lists it may have corrupted.
+  task_check_stacks();
+
   while (blocked_task_list.head != NULL && *s_tick_count >= blocked_task_list.head->owner->wakeup_time) {
     TaskControlBlock *tcb = blocked_task_list.head->owner;
 
@@ -437,8 +481,4 @@ void __attribute__((noinline)) timer_tick_handler(void)
   // Expire software timers: move any due timers to the active list and signal
   // the software-timer service task once per expiry.
   software_timer_tick(*s_tick_count);
-
-  if ((*s_tick_count) % 5000 == 0) {
-    uart_print("heartbeat\r\n");
-  }
 }

@@ -5,5 +5,6 @@
 #define BOOTLOADER_START_ADDR 0x10000   // bootstrap loads bootloader here
 #define BOOT_FLAGS_START_ADDR 0x88000   // shared RAM between bootloader and app
 #define APP_START_ADDR        0x88400   // bootloader loads app here
+#define CORE_MAILBOX_ADDR     0x88300
 
 #endif

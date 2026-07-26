@@ -7,6 +7,7 @@
     "rtos/heavy_overlap",
     "rtos/preemption",
     "rtos/mutex_inheritance",
-    "rtos/software_timer"
+    "rtos/software_timer",
+    "rtos/multicore_blink"
   ]
 }
