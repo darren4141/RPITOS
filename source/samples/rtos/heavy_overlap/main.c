@@ -10,6 +10,7 @@
 #include "reset.h"
 #include "scheduler.h"
 #include "semaphore.h"
+#include "software_timer.h"
 #include "task.h"
 #include "uart.h"
 #include "watchdog.h"
@@ -154,11 +155,14 @@ void kmain(void)
     uart_printf("Create task 5 failed with exit code %d\r\n", ret);
   }
 
-  // watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 3);
-  // ret = watchdog_task_start();
-  // if (ret != E_OK) {
-  // uart_printf("Create watchdog task failed with exit code %d\r\n", ret);
-  // }
+  software_timer_init();
+  software_timer_start();
+
+  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 3);
+  ret = watchdog_task_start();
+  if (ret != E_OK) {
+    uart_printf("Create watchdog task failed with exit code %d\r\n", ret);
+  }
 
   uart_print("Initializing GIC...\r\n");
   gic_init();

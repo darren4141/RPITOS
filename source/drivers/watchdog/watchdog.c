@@ -9,6 +9,7 @@
 
 #ifndef WATCHDOG_MINIMAL
 #include "scheduler.h"
+#include "semaphore.h"
 #include "software_timer.h"
 #include "task.h"
 #endif
@@ -163,24 +164,42 @@ void watchdog_trigger_reset(void)
   while (1) {}
 }
 
-// ── Kick software timer (excluded in WATCHDOG_MINIMAL builds) ──────────────────────────
+// ── Kick + confirm (excluded in WATCHDOG_MINIMAL builds) ─────────────────────
 #ifndef WATCHDOG_MINIMAL
 
 static int64_t s_confirm_delay_ms = 0;
 static SoftwareTimer s_watchdog_kick_timer;
 static SoftwareTimer s_confirm_timer;
+static Semaphore s_confirm_semaphore;
+static TaskControlBlock *s_watchdog_confirm_tcb = NULL;
+
+static uint32_t s_watchdog_kick_count = 0U;
 
 static void watchdog_kick_cb(void *params)
 {
+  (void)params;
   watchdog_kick();
+  s_watchdog_kick_count++;
 }
 
-// One-shot software timer callback: once the confirm delay elapses, confirm the
-// active A/B app slot exactly once so the bootloader will not roll it back.
+// Fast: only signals the dedicated confirm task. No eMMC I/O here.
 static void watchdog_confirm_timer_cb(void *arg)
 {
   (void)arg;
+  semaphore_give(&s_confirm_semaphore);
+}
+
+// Does the actual (slow, eMMC-heavy) confirm work, on its own stack, isolated
+// from the shared software-timer service task.
+static void watchdog_confirm_task(void *params)
+{
+  (void)params;
+  semaphore_take(&s_confirm_semaphore, SEMAPHORE_TAKE_BLOCKING);
   wdt_meta_confirm_slot();
+
+  while (1) {
+    task_delay_ms(60000);
+  }
 }
 
 StatusCode watchdog_set_confirm_slot_timing(uint64_t new_time_ms)
@@ -193,26 +212,27 @@ StatusCode watchdog_task_start(void)
 {
   StatusCode ret;
 
+  ret = software_timer_create(&s_watchdog_kick_timer, WDT_KICK_PERIOD, watchdog_kick_cb, TIMER_MODE_PERIODIC);
+  if (ret != E_OK) {
+    return ret;
+  }
+
+  ret = software_timer_reset(&s_watchdog_kick_timer);
+  if (ret != E_OK) {
+    return ret;
+  }
 
   if (s_confirm_delay_ms >= 0) {
-    // A zero delay confirms on the first scheduler tick, matching the old
-    // task_delay_ms(0) behaviour. watchdog_task_start() runs before the
-    // scheduler starts, so software_timer_create() will not auto-arm the timer;
-    // software_timer_reset() arms it explicitly from the current tick.
-    // Requires software_timer_init()/software_timer_start() to have run first.
     uint64_t delay = (s_confirm_delay_ms > 0) ? (uint64_t)s_confirm_delay_ms : 1U;
 
-    ret = software_timer_create(&s_watchdog_kick_timer, WDT_KICK_PERIOD, watchdog_kick_cb, TIMER_MODE_PERIODIC);
+    semaphore_init(&s_confirm_semaphore, 1U, 0U);
+
+    ret = task_create(watchdog_confirm_task, 512, TASK_PRIORITY_1, NULL, &s_watchdog_confirm_tcb);
     if (ret != E_OK) {
       return ret;
     }
 
     ret = software_timer_create(&s_confirm_timer, delay, watchdog_confirm_timer_cb, TIMER_MODE_ONE_SHOT);
-    if (ret != E_OK) {
-      return ret;
-    }
-
-    ret = software_timer_reset(&s_watchdog_kick_timer);
     if (ret != E_OK) {
       return ret;
     }
@@ -223,7 +243,7 @@ StatusCode watchdog_task_start(void)
     }
   }
 
-  return ret;
+  return E_OK;
 }
 
 #endif
