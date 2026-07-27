@@ -116,14 +116,13 @@ void kmain(void)
 
   gic_init();
   gentimer_init(&clk_freq, hz);
-  dfu_trigger_reset();
-  dfu_trigger_task_start();                    // semaphore-blocked reboot task
-  uart_rx_irq_enable(dfu_trigger_feed_isr);    // RX IRQ signals the reboot task
+  // DFU recovery is wired up automatically now (scheduler_init() + uart_task_start()) —
+  // no per-app call needed. See dfu_trigger.h.
 
   // A/B trial boot: confirm this app slot now that init succeeded.
   wdt_meta_confirm_slot();
 
   __asm__ volatile ("cpsie i" ::: "memory");
 
-  schedulerStart();
+  scheduler_start();
 }

@@ -178,7 +178,7 @@ cntx_switch$:
     @ Use IRQ stack for C handlers (keeps task's SVC stack clean)
     cps  #0x12                   @ switch to IRQ mode
     bl timer_tick_handler
-    bl schedulerSwitchContext
+    bl scheduler_switch_context
 
     cps  #0x13                   @ back to SVC mode
     ldr r0, =p_task_control_block
@@ -198,11 +198,11 @@ _secondary_hang$:
     wfe
     b _secondary_hang$
 
-.globl startFirstTask
-startFirstTask:
+.globl start_first_task
+start_first_task:
     ldr     r0, =p_task_control_block
     ldr     r1, [r0]                @ R1 = first TCB
-    ldr     sp, [r1, #0]            @ SP = pxTopOfStack
+    ldr     sp, [r1, #0]            @ SP = current_sp (first field of TaskControlBlock)
 
     pop     {r0-r12, lr}        @ frame layout: [r0-r12][lr][pc][spsr]
     rfeia   sp!

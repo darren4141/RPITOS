@@ -1,0 +1,31 @@
+# uart
+
+PL011 UART0 driver. Two build modes, selected by `UART_MINIMAL`:
+
+- **Full mode** (default): ring-buffer TX drained by a scheduler task, RX by
+  interrupt, DFU-trigger watch built in.
+- **Minimal mode** (`UART_MINIMAL` defined, used by the bootloader): blocking
+  TX, no task, no ring buffer, no RX interrupt.
+
+## Build-time flags (full mode only)
+
+- `UART_TX_DMA` (default `1`): TX path selector. `1` drives TX via DMA Lite
+  channel 7; `0` falls back to classic byte-by-byte PIO draining (spins on
+  `FR_TXFF` per byte). Build with `-DUART_TX_DMA=0` to A/B the two paths.
+- `UART_TX_TIMING` (default `0`): when `1`, accumulates the CPU-active cycles
+  the TX task spends pushing bytes, independent of `UART_TX_DMA` so all four
+  combinations (DMA/PIO × timing on/off) can be measured. Build with
+  `-DUART_TX_TIMING=1`.
+
+## Bus addressing
+
+`UART0_DR_BUS` (`0x7E201000`) is the VideoCore bus alias of `UART0->DR`, used
+because the DMA controller addresses peripherals via `0x7Exxxxxx`, not the
+ARM-physical `0xFExxxxxx` that the CPU uses.
+
+## Interrupt wiring
+
+If `UART_DMA_TX_CHANNEL` or `UART_IRQ_INTID` change, the matching
+`cmp r2, #<intid>` dispatch lines in `startup/startup.s` must be updated to
+match (INTID = 112 + channel for DMA; 153 is the PL011 combined IRQ on
+BCM2711).

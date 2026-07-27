@@ -64,7 +64,7 @@ void kmain(void)
     while (1) {}
   }
 
-  CRC32_t ctx;
+  CRC32 ctx;
   crc32_start(&ctx);
   crc32_update(&ctx, (const void *)BOOTLOADER_LOAD_ADDR, hdr->fw_length);
   uint32_t actual_crc = crc32_finish(&ctx);
@@ -81,6 +81,6 @@ void kmain(void)
   __asm__ volatile ("dsb sy" ::: "memory");
   __asm__ volatile ("isb"    ::: "memory");
 
-  void (*bootEntry)(void) = (void (*)(void)) BOOTLOADER_LOAD_ADDR;
-  bootEntry();
+  void (*boot_entry)(void) = (void (*)(void)) BOOTLOADER_LOAD_ADDR;
+  boot_entry();
 }

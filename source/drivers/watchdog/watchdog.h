@@ -14,15 +14,19 @@
 #define PM_RSTS_OFFSET              0x28UL
 #define PM_RSTC_WRCFG_FULL_RESET    0x020UL
 
-// What the bootloader should do when wdt_reset_count exceeds wdt_reset_tolerance.
+/**
+ * @brief What the bootloader should do when wdt_reset_count exceeds wdt_reset_tolerance.
+ * @note See docs.md for the reset-policy vs. reset-reason distinction.
+ */
 typedef enum {
   WATCHDOG_RESET_POLICY_FORCE_UPDATE = 0,  // force into DFU receive loop
   WATCHDOG_RESET_POLICY_JUMP_SLOT_B  = 1,  // reserved — app slot B (not implemented)
   WATCHDOG_RESET_POLICY_ROLLBACK     = 2,  // reserved — rollback to previous slot (not implemented)
 } WatchdogResetPolicy;
 
-// Why the watchdog reset policy was triggered. Stored in boot_flags for
-// future diagnostics. Not yet written by the bootloader.
+/**
+ * @brief Why the watchdog reset policy was triggered. Stored in boot_flags for future diagnostics; not yet written by the bootloader.
+ */
 typedef enum {
   WATCHDOG_RESET_REASON_NONE           = 0,
   WATCHDOG_RESET_REASON_COUNT_EXCEEDED = 1,
@@ -31,14 +35,9 @@ typedef enum {
 // ── WDT persistent metadata (lives in eMMC EMMC_SECTOR_METADATA) ─────────────
 
 #define WDT_META_MAGIC              0xB007DA7AU
-
 #define WDT_KICK_PERIOD             2000U
 
-// A/B trial: after a DFU flips the active app slot, the new slot boots "on
-// trial". The application must call wdt_meta_confirm_slot() once it reaches a
-// known-good state. If it does not, each bootloader re-entry increments
-// trial_boot_count; once it reaches this limit the bootloader rolls back to the
-// previous (untouched, still-valid) slot.
+// See docs.md for the A/B trial-boot mechanism this bounds.
 #define APP_SLOT_TRIAL_MAX_ATTEMPTS 3U
 
 typedef struct {
@@ -56,42 +55,63 @@ typedef struct {
 // In-RAM shadow. Call wdt_meta_read() to populate, wdt_meta_write() to persist.
 extern WdtMeta wdt_meta;
 
-// Read/verify (magic + CRC) metadata from eMMC into the shadow; on a bad or torn
-// sector the shadow is reset to safe defaults (active slot A, no trial).
+/**
+ * @brief Read/verify (magic + CRC) metadata from eMMC into the shadow.
+ * @note On a bad or torn sector the shadow is reset to safe defaults (active slot A, no trial).
+ */
 StatusCode wdt_meta_read(void);
-// Recompute the CRC and persist the shadow to eMMC.
+
+/**
+ * @brief Recompute the CRC and persist the shadow to eMMC.
+ */
 StatusCode wdt_meta_write(void);
-// Confirm the active app slot: clears the trial flag + counter so the bootloader
-// will not roll back. Self-contained (reads, clears, writes) — the application
-// calls this once healthy. No-op-safe if the slot was not on trial.
+
+/**
+ * @brief Confirm the active app slot: clears the trial flag + counter so the bootloader will not roll back.
+ * @note Self-contained (reads, clears, writes) — the application calls this once healthy. No-op-safe if the slot was not on trial.
+ */
 StatusCode wdt_meta_confirm_slot(void);
 
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Returns true if the previous boot was caused by a watchdog timeout.
-// Call before watchdog_init() — writing PM_RSTC on init may clear the
-// sticky bits in PM_RSTS.
+/**
+ * @brief Return true if the previous boot was caused by a watchdog timeout.
+ * @note Call before watchdog_init() — writing PM_RSTC on init may clear the sticky bits in PM_RSTS.
+ */
 bool watchdog_was_wdt_reset(void);
 
-// Arm the watchdog with a [1, 15] second timeout (clamped). Sets the reset
-// policy and tolerance: after tolerance watchdog resets the bootloader applies
-// policy. A negative tolerance means the policy never fires (infinite retries).
+/**
+ * @brief Arm the watchdog with a [1, 15] second timeout (clamped).
+ * @note After `tolerance` watchdog resets the bootloader applies `policy`. A
+ * negative tolerance means the policy never fires (infinite retries).
+ */
 StatusCode watchdog_init(uint32_t timeout_s, WatchdogResetPolicy policy, int32_t tolerance);
 
-// Reset the countdown. Safe to call from any context — a single 32-bit
-// MMIO write is atomic on Cortex-A72.
+/**
+ * @brief Reset the countdown. Safe to call from any context — a single 32-bit MMIO write is atomic on Cortex-A72.
+ */
 void watchdog_kick(void);
 
-// Disarm the watchdog. No reset will occur after this returns.
+/**
+ * @brief Disarm the watchdog. No reset will occur after this returns.
+ */
 void watchdog_disable(void);
 
-// Trigger an immediate reset via the watchdog. Never returns.
+/**
+ * @brief Trigger an immediate reset via the watchdog. Never returns.
+ */
 void watchdog_trigger_reset(void);
 
 // Watchdog kick task — kicks every 2 s. Requires watchdog_init() with a
 // timeout > 2 s. Define WATCHDOG_MINIMAL to exclude this (bootloader).
 #ifndef WATCHDOG_MINIMAL
+
+/**
+ * @brief Start the background task that kicks the watchdog every WDT_KICK_PERIOD ms.
+ */
 StatusCode watchdog_task_start(void);
+
+/**
+ * @brief Change how long after boot the confirm-slot check considers the app unconfirmed.
+ */
 StatusCode watchdog_set_confirm_slot_timing(uint64_t new_time_ms);
 #endif
 

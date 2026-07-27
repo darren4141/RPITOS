@@ -10,14 +10,14 @@
 #define PACKET_SOF          0xAA
 
 typedef enum {
-  CMD_REQ              = 0x01,
-  CMD_START            = 0x02,
+  CMD_REQ               = 0x01,
+  CMD_START             = 0x02,
   CMD_START_SELF_UPDATE = 0x03,
-  CMD_DATA             = 0x04,
-  CMD_FINISH           = 0x05,
-  CMD_ABORT            = 0x06,
-  CMD_GET_STATUS       = 0x07,
-  CMD_RECOVER          = 0x08,
+  CMD_DATA              = 0x04,
+  CMD_FINISH            = 0x05,
+  CMD_ABORT             = 0x06,
+  CMD_GET_STATUS        = 0x07,
+  CMD_RECOVER           = 0x08,
   NUM_CMDS
 } Commands;
 
@@ -30,15 +30,17 @@ typedef enum {
   PACKET_STATE_END,
   PACKET_STATE_SUCCESS,
   PACKET_STATE_ERROR,
-} Packet_State;
+} PacketState;
 
 typedef enum {
   DFU_STATE_START,
   DFU_STATE_RECIEVE_DATA,
   DFU_STATE_DONE,
   DFU_STATE_ABORT,
-} DFU_State;
+} DfuState;
 
+// Register-map-style field names (CMD, LEN, DATA, CRC) mirror the DFU wire
+// protocol so the struct can be cross-referenced against the protocol spec.
 typedef struct DFU_Packet {
   uint8_t CMD;
   uint16_t LEN;
@@ -61,10 +63,17 @@ typedef struct StartPacket {
 // after the 8-entry vector table; dfu_receive refuses to commit an app slot
 // whose first firmware sector doesn't carry it.
 // KEEP THE VALUE AND OFFSET IN SYNC with the `.word` in startup/startup.s.
-#define DFU_APP_MAGIC          0x44465521U   // 'D' 'F' 'U' '!'
-#define DFU_APP_MARKER_OFFSET  0x20U         // 8 vector entries * 4 bytes
+#define DFU_APP_MAGIC         0x44465521U    // 'D' 'F' 'U' '!'
+#define DFU_APP_MARKER_OFFSET 0x20U          // 8 vector entries * 4 bytes
 
+/**
+ * @brief Initialize the DFU receive state machine and its UART packet parser.
+ */
 StatusCode dfu_init();
+
+/**
+ * @brief Run the blocking DFU receive loop: parse incoming packets and write the image to the inactive app slot.
+ */
 StatusCode dfu_receive();
 
 #endif

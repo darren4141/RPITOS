@@ -146,7 +146,7 @@ static void bootloader_init()
 
   uint32_t active_sector = APP_SLOT_TO_SECTOR(wdt_meta.active_app_slot);
   if (revalidate) {
-    boot_flags.fw_crc_ok = (boot_validateApp(active_sector) == E_OK) ? 1U : 0U;
+    boot_flags.fw_crc_ok = (boot_validate_app(active_sector) == E_OK) ? 1U : 0U;
     uart_printf("boot: validated active slot %s -> %s\r\n",
                 APP_SLOT_LETTER(wdt_meta.active_app_slot),
                 boot_flags.fw_crc_ok ? "OK" : "INVALID");
@@ -191,11 +191,11 @@ static StatusCode bootloader_execute()
     STATUS_OK_OR_WARN(wdt_meta_write());
   }
 
-  ret = boot_loadApp(APP_SLOT_TO_SECTOR(wdt_meta.active_app_slot));
+  ret = boot_load_app(APP_SLOT_TO_SECTOR(wdt_meta.active_app_slot));
   if (ret != E_OK) {
     return ret;
   }
-  boot_jumpToApp();
+  boot_jump_to_app();
   return E_OK;
 }
 
@@ -215,8 +215,8 @@ void kmain(void)
       // dfu_receive() validated the image and flipped the active slot to it.
       wdt_meta.wdt_reset_count = 0U;
       STATUS_OK_OR_WARN(wdt_meta_write());
-      boot_loadApp(APP_SLOT_TO_SECTOR(wdt_meta.active_app_slot));
-      boot_jumpToApp();
+      boot_load_app(APP_SLOT_TO_SECTOR(wdt_meta.active_app_slot));
+      boot_jump_to_app();
     }
     uart_print("boot: DFU recovery failed, retrying\r\n");
   }

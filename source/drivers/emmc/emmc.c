@@ -2,8 +2,8 @@
 #include "emmc.h"
 #include "uart.h"
 
-static uint32_t ulRCA = 1;
-static int xIsHC = 1;             // CM4 eMMC is always high-capacity (sector addressing)
+static uint32_t rca = 1;
+static int is_high_capacity = 1;             // CM4 eMMC is always high-capacity (sector addressing)
 static int s_emmc_initialized = 0;
 static int s_adma2_supported = 0; // probed from CAPABILITIES0 at init
 static uint8_t  s_device_type = 0; // EXT_CSD DEVICE_TYPE (supported speed modes)
@@ -21,38 +21,38 @@ static void emmc_delay_us(uint32_t us)
   while (i--) {}
 }
 
-static StatusCode emmc_wait_interrupt(uint32_t ulMask, uint32_t ulTimeoutMs)
+static StatusCode emmc_wait_interrupt(uint32_t mask, uint32_t timeout_ms)
 {
-  uint32_t ulCount = ulTimeoutMs * 1000;
-  while (!(pxEMMC->INTERRUPT & ulMask)) {
-    if (pxEMMC->INTERRUPT & INT_ERROR_MASK) {
+  uint32_t count = timeout_ms * 1000;
+  while (!(emmc_regs->INTERRUPT & mask)) {
+    if (emmc_regs->INTERRUPT & INT_ERROR_MASK) {
       uart_printf("emmc: int error 0x%08X (waiting 0x%08X)\r\n",
-                  pxEMMC->INTERRUPT, ulMask);
-      pxEMMC->INTERRUPT = 0xFFFFFFFF;
+                  emmc_regs->INTERRUPT, mask);
+      emmc_regs->INTERRUPT = 0xFFFFFFFF;
       return E_CMD;
     }
-    if (--ulCount == 0) {
+    if (--count == 0) {
       uart_printf("emmc: int timeout mask=0x%08X INT=0x%08X STATUS=0x%08X\r\n",
-                  ulMask, pxEMMC->INTERRUPT, pxEMMC->STATUS);
+                  mask, emmc_regs->INTERRUPT, emmc_regs->STATUS);
       return E_TIMED_OUT;
     }
     emmc_delay_us(1);
   }
-  if (pxEMMC->INTERRUPT & INT_ERROR_MASK) {
+  if (emmc_regs->INTERRUPT & INT_ERROR_MASK) {
     uart_printf("emmc: int error 0x%08X (after mask=0x%08X)\r\n",
-                pxEMMC->INTERRUPT, ulMask);
-    pxEMMC->INTERRUPT = 0xFFFFFFFF;
+                emmc_regs->INTERRUPT, mask);
+    emmc_regs->INTERRUPT = 0xFFFFFFFF;
     return E_CMD;
   }
-  pxEMMC->INTERRUPT = ulMask;
+  emmc_regs->INTERRUPT = mask;
   return E_OK;
 }
 
-static StatusCode emmc_wait_status(uint32_t ulMask, uint32_t ulTimeoutMs)
+static StatusCode emmc_wait_status(uint32_t mask, uint32_t timeout_ms)
 {
-  uint32_t ulCount = ulTimeoutMs * 1000;
-  while (pxEMMC->STATUS & ulMask) {
-    if (--ulCount == 0) {
+  uint32_t count = timeout_ms * 1000;
+  while (emmc_regs->STATUS & mask) {
+    if (--count == 0) {
       return E_TIMED_OUT;
     }
     emmc_delay_us(1);
@@ -60,42 +60,42 @@ static StatusCode emmc_wait_status(uint32_t ulMask, uint32_t ulTimeoutMs)
   return E_OK;
 }
 
-static StatusCode emmc_send_command(uint32_t ulCmd, uint32_t ulArg)
+static StatusCode emmc_send_command(uint32_t cmd, uint32_t arg)
 {
   if (emmc_wait_status(STATUS_CMD_INHIBIT, 2000) != E_OK) {
-    uart_printf("emmc: CMD_INHIBIT stuck STATUS=0x%08X\r\n", pxEMMC->STATUS);
+    uart_printf("emmc: CMD_INHIBIT stuck STATUS=0x%08X\r\n", emmc_regs->STATUS);
     return E_TIMED_OUT;
   }
 
   // R1b (busy-after-response) commands also need DAT line free
-  if ((ulCmd & (3u << 16)) == CMD_RESP_48B) {
+  if ((cmd & (3u << 16)) == CMD_RESP_48B) {
     if (emmc_wait_status(STATUS_DAT_INHIBIT, 2000) != E_OK) {
-      uart_printf("emmc: DAT_INHIBIT stuck STATUS=0x%08X\r\n", pxEMMC->STATUS);
+      uart_printf("emmc: DAT_INHIBIT stuck STATUS=0x%08X\r\n", emmc_regs->STATUS);
       return E_TIMED_OUT;
     }
   }
 
-  pxEMMC->INTERRUPT = 0xFFFFFFFF;
-  pxEMMC->ARG1 = ulArg;
-  pxEMMC->CMDTM = ulCmd;
+  emmc_regs->INTERRUPT = 0xFFFFFFFF;
+  emmc_regs->ARG1 = arg;
+  emmc_regs->CMDTM = cmd;
 
   // No-response commands (CMD0): wait for CMD_INHIBIT to clear — no INT_CMD_DONE fires
-  if ((ulCmd & (3u << 16)) == CMD_RESP_NONE) {
+  if ((cmd & (3u << 16)) == CMD_RESP_NONE) {
     emmc_delay_us(200);      // > 48 clocks at 400 KHz (~120 µs)
-    pxEMMC->INTERRUPT = 0xFFFFFFFF;
+    emmc_regs->INTERRUPT = 0xFFFFFFFF;
     return emmc_wait_status(STATUS_CMD_INHIBIT, 100);
   }
 
-  StatusCode xRet = emmc_wait_interrupt(INT_CMD_DONE, 2000);
-  if (xRet != E_OK) {
-    return xRet;
+  StatusCode ret = emmc_wait_interrupt(INT_CMD_DONE, 2000);
+  if (ret != E_OK) {
+    return ret;
   }
 
   // R1b: wait for card to deassert busy on DAT0
-  if ((ulCmd & (3u << 16)) == CMD_RESP_48B) {
+  if ((cmd & (3u << 16)) == CMD_RESP_48B) {
     emmc_delay_us(100);
     if (emmc_wait_status(STATUS_DAT_ACTIVE, 5000) != E_OK) {
-      uart_printf("emmc: R1b busy timeout STATUS=0x%08X\r\n", pxEMMC->STATUS);
+      uart_printf("emmc: R1b busy timeout STATUS=0x%08X\r\n", emmc_regs->STATUS);
       return E_TIMED_OUT;
     }
   }
@@ -103,38 +103,38 @@ static StatusCode emmc_send_command(uint32_t ulCmd, uint32_t ulArg)
   return E_OK;
 }
 
-static StatusCode emmc_set_clock(uint32_t ulHz)
+static StatusCode emmc_set_clock(uint32_t hz)
 {
   if (emmc_wait_status(STATUS_CMD_INHIBIT | STATUS_DAT_INHIBIT, 2000) != E_OK) {
     return E_TIMED_OUT;
   }
 
-  pxEMMC->CONTROL1 &= ~CTRL1_CLK_EN;
+  emmc_regs->CONTROL1 &= ~CTRL1_CLK_EN;
   emmc_delay_us(10);
 
-  uint32_t ulDiv = EMMC2_BASE_CLOCK / (2u * ulHz);
-  if (ulDiv < 1) {
-    ulDiv = 1;
+  uint32_t div = EMMC2_BASE_CLOCK / (2u * hz);
+  if (div < 1) {
+    div = 1;
   }
-  if (ulDiv > 0x3FF) {
-    ulDiv = 0x3FF;
+  if (div > 0x3FF) {
+    div = 0x3FF;
   }
 
-  uint32_t ulCtrl1 = pxEMMC->CONTROL1;
-  ulCtrl1 &= ~0xFFE0u;
-  ulCtrl1 |= ((ulDiv & 0xFF) << 8) | (((ulDiv >> 8) & 0x3) << 6) | CTRL1_CLK_INTLEN;
-  pxEMMC->CONTROL1 = ulCtrl1;
+  uint32_t ctrl1 = emmc_regs->CONTROL1;
+  ctrl1 &= ~0xFFE0u;
+  ctrl1 |= ((div & 0xFF) << 8) | (((div >> 8) & 0x3) << 6) | CTRL1_CLK_INTLEN;
+  emmc_regs->CONTROL1 = ctrl1;
   emmc_delay_us(20);
 
-  uint32_t ulCount = 10000;
-  while (!(pxEMMC->CONTROL1 & CTRL1_CLK_STABLE)) {
-    if (--ulCount == 0) {
+  uint32_t count = 10000;
+  while (!(emmc_regs->CONTROL1 & CTRL1_CLK_STABLE)) {
+    if (--count == 0) {
       return E_TIMED_OUT;
     }
     emmc_delay_us(1);
   }
 
-  pxEMMC->CONTROL1 |= CTRL1_CLK_EN;
+  emmc_regs->CONTROL1 |= CTRL1_CLK_EN;
   emmc_delay_us(20);
   return E_OK;
 }
@@ -143,7 +143,7 @@ static StatusCode emmc_set_clock(uint32_t ulHz)
 // data block over DAT, same as a CMD17 read but a different command index.
 static StatusCode emmc_read_ext_csd(uint8_t *buf)
 {
-  pxEMMC->BLKSIZECNT = (1u << 16) | SECTOR_SIZE;
+  emmc_regs->BLKSIZECNT = (1u << 16) | SECTOR_SIZE;
   if (emmc_send_command(CMD8, 0) != E_OK) {
     return E_CMD;
   }
@@ -152,7 +152,7 @@ static StatusCode emmc_read_ext_csd(uint8_t *buf)
   }
   uint32_t *p = (uint32_t *)buf;
   for (uint32_t i = 0; i < SECTOR_SIZE / 4; i++) {
-    p[i] = pxEMMC->DATA;
+    p[i] = emmc_regs->DATA;
   }
   return emmc_wait_interrupt(INT_DATA_DONE, 2000);
 }
@@ -160,7 +160,7 @@ static StatusCode emmc_read_ext_csd(uint8_t *buf)
 // Probe controller capabilities
 static void emmc_probe_capabilities(void)
 {
-  uint32_t cap0 = pxEMMC->CAPABILITIES0;
+  uint32_t cap0 = emmc_regs->CAPABILITIES0;
   s_adma2_supported = (cap0 & CAP0_ADMA2_SUPPORT) ? 1 : 0;
   uart_printf("emmc: CAPABILITIES0=0x%08X ADMA2=%s\r\n",
               cap0, s_adma2_supported ? "yes" : "no");
@@ -215,13 +215,13 @@ static void emmc_negotiate_speed(void)
   // High Speed: card HS_TIMING=1, host HS-enable, 50 MHz (200 MHz base / 2 / 2).
   if (s_device_type & DEVICE_TYPE_HS52) {
     if (emmc_send_command(CMD6_SWITCH, SWITCH_ARG(EXT_CSD_HS_TIMING, EXT_CSD_HS_TIMING_HS)) == E_OK) {
-      pxEMMC->CONTROL0 |= CTRL0_HS_EN;
+      emmc_regs->CONTROL0 |= CTRL0_HS_EN;
       if (emmc_set_clock(50000000) == E_OK && emmc_bus_ok()) {
         hs = 1;
       }
       else {
         emmc_set_clock(25000000);
-        pxEMMC->CONTROL0 &= ~CTRL0_HS_EN;
+        emmc_regs->CONTROL0 &= ~CTRL0_HS_EN;
         emmc_send_command(CMD6_SWITCH, SWITCH_ARG(EXT_CSD_HS_TIMING, 0));
         uart_print("emmc: HS52 verify failed, staying 25MHz\r\n");
       }
@@ -233,12 +233,12 @@ static void emmc_negotiate_speed(void)
 
   // 8-bit width: switch card + host, verify via EXT_CSD read-back.
   if (emmc_send_command(CMD6_SWITCH, SWITCH_ARG(EXT_CSD_BUS_WIDTH, EXT_CSD_BUS_WIDTH_8BIT)) == E_OK) {
-    pxEMMC->CONTROL0 = (pxEMMC->CONTROL0 & ~CTRL0_4BIT) | CTRL0_8BIT;
+    emmc_regs->CONTROL0 = (emmc_regs->CONTROL0 & ~CTRL0_4BIT) | CTRL0_8BIT;
     if (emmc_bus_ok()) {
       width = 8;
     }
     else {
-      pxEMMC->CONTROL0 = (pxEMMC->CONTROL0 & ~CTRL0_8BIT) | CTRL0_4BIT;
+      emmc_regs->CONTROL0 = (emmc_regs->CONTROL0 & ~CTRL0_8BIT) | CTRL0_4BIT;
       emmc_send_command(CMD6_SWITCH, SWITCH_ARG(EXT_CSD_BUS_WIDTH, EXT_CSD_BUS_WIDTH_4BIT));
       uart_print("emmc: 8-bit verify failed, reverted to 4-bit\r\n");
     }
@@ -246,6 +246,125 @@ static void emmc_negotiate_speed(void)
 
   uart_printf("emmc: mode = %s, %u-bit\r\n",
               hs ? "HS52 (50MHz)" : "legacy (25MHz)", width);
+}
+
+// ---------------------------------------------------------------------------
+// emmc_init() sub-steps, run in order
+// ---------------------------------------------------------------------------
+
+// Returns true if a previous boot stage already brought the controller up
+// (SD clock enabled and stable) and re-init should be skipped to avoid
+// disrupting an active card.
+static int emmc_already_running(void)
+{
+  return (emmc_regs->CONTROL1 & (CTRL1_CLK_EN | CTRL1_CLK_STABLE)) == (CTRL1_CLK_EN | CTRL1_CLK_STABLE);
+}
+
+// Reset the host + CMD + DATA circuits, then configure the data timeout unit
+// and interrupt masks. First step of a cold init.
+static StatusCode emmc_host_reset(void)
+{
+  emmc_regs->CONTROL0 = 0;
+  emmc_regs->CONTROL1 = 0;
+  emmc_regs->CONTROL1 |= CTRL1_SRST_HC | CTRL1_SRST_CMD | CTRL1_SRST_DATA;
+
+  uint32_t count = 10000;
+  while (emmc_regs->CONTROL1 & (CTRL1_SRST_HC | CTRL1_SRST_CMD | CTRL1_SRST_DATA)) {
+    if (--count == 0) {
+      uart_print("emmc: reset timeout\r\n");
+      return E_TIMED_OUT;
+    }
+    emmc_delay_us(1);
+  }
+
+  emmc_regs->CONTROL1 = (emmc_regs->CONTROL1 & ~CTRL1_DATA_TOUNIT) | (0xE << 16);
+  emmc_regs->IRPT_MASK = 0xFFFFFFFF;
+  emmc_regs->IRPT_EN = 0x00000000;
+
+  return E_OK;
+}
+
+// Bring the SD clock up to the 400 kHz identification rate and turn on bus
+// power. Must run before any command is sent.
+static StatusCode emmc_power_on(void)
+{
+  if (emmc_set_clock(400000) != E_OK) {
+    uart_print("emmc: clock 400KHz failed\r\n");
+    return E_TIMED_OUT;
+  }
+
+  // SD Bus Power on, 3.3V (CONTROL0[11:9]=111, CONTROL0[8]=1).
+  // Without this the EMMC2 controller does not drive the CMD line and
+  // CMD_INHIBIT never clears after CMD0.
+  emmc_regs->CONTROL0 |= (7u << 9) | (1u << 8);
+  emmc_delay_us(10000);       // >1 ms for bus power to stabilise
+
+  return E_OK;
+}
+
+// Run the eMMC identification sequence: go idle, negotiate operating
+// conditions, read the CID, assign an RCA, and select the card into the
+// Transfer state. Sets is_high_capacity and rca as a side effect.
+static StatusCode emmc_card_identify(void)
+{
+  // CMD0 — go idle
+  emmc_send_command(CMD0, 0); // failure non-fatal; card may already be idle
+  emmc_delay_us(2000);
+
+  // CMD1 — send op cond (eMMC-specific; SD uses ACMD41)
+  // 0x40FF8080 = HC request | dual-voltage 3.3V/1.8V | sector addressing
+  uint32_t count = 1000;
+  uint32_t ocr = 0;
+  do {
+    if (emmc_send_command(CMD1, 0x40FF8080) != E_OK) {
+      uart_printf("emmc: CMD1 fail INT=0x%08X\r\n", emmc_regs->INTERRUPT);
+      return E_CMD;
+    }
+    ocr = emmc_regs->RESP0;
+    if (--count == 0) {
+      uart_print("emmc: CMD1 timeout\r\n");
+      return E_TIMED_OUT;
+    }
+    emmc_delay_us(1000);
+  } while (!(ocr & (1u << 31)));
+
+  is_high_capacity = (ocr & (1u << 30)) ? 1 : 0;
+
+  // CMD2 — get CID (136-bit response, just ignore the payload)
+  if (emmc_send_command(CMD2, 0) != E_OK) {
+    return E_CMD;
+  }
+
+  // CMD3 — set RCA (eMMC: host assigns RCA via arg; response is R1 card status, NOT an RCA echo)
+  rca = 1;
+  if (emmc_send_command(CMD3, rca << 16) != E_OK) {
+    return E_CMD;
+  }
+
+  // CMD7 — select card (move to Transfer state)
+  if (emmc_send_command(CMD7, rca << 16) != E_OK) {
+    return E_CMD;
+  }
+
+  return E_OK;
+}
+
+// Switch the card + host to the 4-bit / 25 MHz baseline. Always works, and
+// is what emmc_negotiate_speed() falls back to if it can't upgrade further.
+static StatusCode emmc_bus_baseline(void)
+{
+  if (emmc_send_command(CMD6_SWITCH, SWITCH_ARG(EXT_CSD_BUS_WIDTH, EXT_CSD_BUS_WIDTH_4BIT)) != E_OK) {
+    uart_print("emmc: CMD6 failed\r\n");
+    return E_CMD;
+  }
+  emmc_regs->CONTROL0 |= CTRL0_4BIT;    // host: 4-bit mode
+
+  if (emmc_set_clock(25000000) != E_OK) {
+    uart_print("emmc: 25MHz clock failed\r\n");
+    return E_TIMED_OUT;
+  }
+
+  return E_OK;
 }
 
 // ---------------------------------------------------------------------------
@@ -258,9 +377,7 @@ StatusCode emmc_init(void)
     return E_OK;
   }
 
-  // If a previous boot stage already initialized the controller, the SD clock
-  // will be enabled and stable. Skip re-init to avoid disrupting an active card.
-  if ((pxEMMC->CONTROL1 & (CTRL1_CLK_EN | CTRL1_CLK_STABLE)) == (CTRL1_CLK_EN | CTRL1_CLK_STABLE)) {
+  if (emmc_already_running()) {
     emmc_probe_capabilities();
     s_emmc_initialized = 1;
     return E_OK;
@@ -268,82 +385,24 @@ StatusCode emmc_init(void)
 
   uart_print("emmc: init\r\n");
 
-  // Reset host + CMD + DATA circuits
-  pxEMMC->CONTROL0 = 0;
-  pxEMMC->CONTROL1 = 0;
-  pxEMMC->CONTROL1 |= CTRL1_SRST_HC | CTRL1_SRST_CMD | CTRL1_SRST_DATA;
-  uint32_t ulCount = 10000;
-  while (pxEMMC->CONTROL1 & (CTRL1_SRST_HC | CTRL1_SRST_CMD | CTRL1_SRST_DATA)) {
-    if (--ulCount == 0) {
-      uart_print("emmc: reset timeout\r\n");return E_TIMED_OUT;
-    }
-    emmc_delay_us(1);
+  StatusCode ret = emmc_host_reset();
+  if (ret != E_OK) {
+    return ret;
   }
 
-  pxEMMC->CONTROL1 = (pxEMMC->CONTROL1 & ~CTRL1_DATA_TOUNIT) | (0xE << 16);
-  pxEMMC->IRPT_MASK = 0xFFFFFFFF;
-  pxEMMC->IRPT_EN = 0x00000000;
-
-  if (emmc_set_clock(400000) != E_OK) {
-    uart_print("emmc: clock 400KHz failed\r\n");
-    return E_TIMED_OUT;
+  ret = emmc_power_on();
+  if (ret != E_OK) {
+    return ret;
   }
 
-  // SD Bus Power on, 3.3V (CONTROL0[11:9]=111, CONTROL0[8]=1).
-  // Without this the EMMC2 controller does not drive the CMD line and
-  // CMD_INHIBIT never clears after CMD0.
-  pxEMMC->CONTROL0 |= (7u << 9) | (1u << 8);
-  emmc_delay_us(10000);       // >1 ms for bus power to stabilise
-
-  // CMD0 — go idle
-  emmc_send_command(CMD0, 0); // failure non-fatal; card may already be idle
-  emmc_delay_us(2000);
-
-  // CMD1 — send op cond (eMMC-specific; SD uses ACMD41)
-  // 0x40FF8080 = HC request | dual-voltage 3.3V/1.8V | sector addressing
-  ulCount = 1000;
-  uint32_t ulOCR = 0;
-  do {
-    if (emmc_send_command(CMD1, 0x40FF8080) != E_OK) {
-      uart_printf("emmc: CMD1 fail INT=0x%08X\r\n", pxEMMC->INTERRUPT);
-      return E_CMD;
-    }
-    ulOCR = pxEMMC->RESP0;
-    if (--ulCount == 0) {
-      uart_print("emmc: CMD1 timeout\r\n");return E_TIMED_OUT;
-    }
-    emmc_delay_us(1000);
-  } while (!(ulOCR & (1u << 31)));
-
-  xIsHC = (ulOCR & (1u << 30)) ? 1 : 0;
-
-  // CMD2 — get CID (136-bit response, just ignore the payload)
-  if (emmc_send_command(CMD2, 0) != E_OK) {
-    return E_CMD;
+  ret = emmc_card_identify();
+  if (ret != E_OK) {
+    return ret;
   }
 
-  // CMD3 — set RCA (eMMC: host assigns RCA via arg; response is R1 card status, NOT an RCA echo)
-  ulRCA = 1;
-  if (emmc_send_command(CMD3, ulRCA << 16) != E_OK) {
-    return E_CMD;
-  }
-
-  // CMD7 — select card (move to Transfer state)
-  if (emmc_send_command(CMD7, ulRCA << 16) != E_OK) {
-    return E_CMD;
-  }
-
-  // Baseline: 4-bit @ 25 MHz. Always works; the negotiate step below upgrades
-  // from here (and can fall back to exactly this) after probing the device.
-  if (emmc_send_command(CMD6_SWITCH, SWITCH_ARG(EXT_CSD_BUS_WIDTH, EXT_CSD_BUS_WIDTH_4BIT)) != E_OK) {
-    uart_print("emmc: CMD6 failed\r\n");
-    return E_CMD;
-  }
-  pxEMMC->CONTROL0 |= CTRL0_4BIT;    // host: 4-bit mode
-
-  if (emmc_set_clock(25000000) != E_OK) {
-    uart_print("emmc: 25MHz clock failed\r\n");
-    return E_TIMED_OUT;
+  ret = emmc_bus_baseline();
+  if (ret != E_OK) {
+    return ret;
   }
 
   emmc_probe_capabilities();   // reads EXT_CSD -> s_device_type, s_sec_count
@@ -372,9 +431,9 @@ static Adma2Desc s_adma2_table[ADMA2_MAX_DESCRIPTORS] __attribute__((aligned(8))
 // so a PIO retry after a failed DMA starts clean. Card selection/clock survive.
 static void emmc_reset_cmd_data(void)
 {
-  pxEMMC->CONTROL1 |= CTRL1_SRST_CMD | CTRL1_SRST_DATA;
+  emmc_regs->CONTROL1 |= CTRL1_SRST_CMD | CTRL1_SRST_DATA;
   uint32_t c = 10000;
-  while ((pxEMMC->CONTROL1 & (CTRL1_SRST_CMD | CTRL1_SRST_DATA)) && --c) {
+  while ((emmc_regs->CONTROL1 & (CTRL1_SRST_CMD | CTRL1_SRST_DATA)) && --c) {
     emmc_delay_us(1);
   }
 }
@@ -407,35 +466,35 @@ static uint32_t emmc_build_adma2_table(const void *buf, uint32_t total_bytes)
   return n;
 }
 
-// Run a multi-block transfer via ADMA2. ulCmd is CMD18 (read) or CMD25 (write).
+// Run a multi-block transfer via ADMA2. cmd is CMD18 (read) or CMD25 (write).
 // Returns E_OK, or an error so the caller can retry the transfer in PIO.
-static StatusCode emmc_xfer_adma2(uint32_t ulCmd, uint32_t ulSector,
-                                  const void *pvBuf, uint32_t ulCount, int is_write)
+static StatusCode emmc_xfer_adma2(uint32_t cmd, uint32_t sector,
+                                  const void *buf, uint32_t count, int is_write)
 {
-  if (emmc_build_adma2_table(pvBuf, ulCount * SECTOR_SIZE) == 0) {
+  if (emmc_build_adma2_table(buf, count * SECTOR_SIZE) == 0) {
     return E_INVALID_ARGS;
   }
 
   // Publish the descriptor table before the controller walks it.
   __asm__ volatile ("dsb sy" ::: "memory");
 
-  pxEMMC->CONTROL0 = (pxEMMC->CONTROL0 & ~CTRL0_DMA_SELECT_MASK) | CTRL0_DMA_SELECT_ADMA2;
-  pxEMMC->ADMA_ADDRESS = (uint32_t)(uintptr_t)s_adma2_table;
+  emmc_regs->CONTROL0 = (emmc_regs->CONTROL0 & ~CTRL0_DMA_SELECT_MASK) | CTRL0_DMA_SELECT_ADMA2;
+  emmc_regs->ADMA_ADDRESS = (uint32_t)(uintptr_t)s_adma2_table;
 
-  uint32_t ulArg = xIsHC ? ulSector : ulSector * SECTOR_SIZE;
-  pxEMMC->BLKSIZECNT = (ulCount << 16) | SECTOR_SIZE;
+  uint32_t arg = is_high_capacity ? sector : sector * SECTOR_SIZE;
+  emmc_regs->BLKSIZECNT = (count << 16) | SECTOR_SIZE;
 
-  if (emmc_send_command(ulCmd | TM_DMA_EN, ulArg) != E_OK) {
+  if (emmc_send_command(cmd | TM_DMA_EN, arg) != E_OK) {
     return E_CMD;
   }
 
   // A single wait for the whole transfer — the controller walks every descriptor
   // itself. INT_ERROR_MASK already includes INT_ADMA_ERR, so emmc_wait_interrupt
   // surfaces ADMA faults.
-  StatusCode st = emmc_wait_interrupt(INT_DATA_DONE, 2000u + ulCount * 2u);
+  StatusCode st = emmc_wait_interrupt(INT_DATA_DONE, 2000u + count * 2u);
   if (st != E_OK) {
     uart_printf("emmc: ADMA2 xfer failed st=%d ADMA_ERR=0x%08X\r\n",
-                st, pxEMMC->ADMA_ERROR);
+                st, emmc_regs->ADMA_ERROR);
     return st;
   }
 
@@ -449,48 +508,48 @@ static StatusCode emmc_xfer_adma2(uint32_t ulCmd, uint32_t ulSector,
   return E_OK;
 }
 
-StatusCode emmc_read_blocks(uint32_t ulSector, void *pvBuf, uint32_t ulCount)
+StatusCode emmc_read_blocks(uint32_t sector, void *buf, uint32_t count)
 {
-  if (ulCount == 0) {
+  if (count == 0) {
     return E_OK;
   }
 
   // Multi-block reads go through ADMA2 when supported; fall back to PIO on any
   // failure (table too large, DMA error) after clearing the data circuit.
-  if (s_adma2_supported && (ulCount > 1)) {
-    if (emmc_xfer_adma2(CMD18, ulSector, pvBuf, ulCount, 0) == E_OK) {
+  if (s_adma2_supported && (count > 1)) {
+    if (emmc_xfer_adma2(CMD18, sector, buf, count, 0) == E_OK) {
       return E_OK;
     }
     emmc_reset_cmd_data();
     uart_print("emmc: ADMA2 read -> PIO fallback\r\n");
   }
 
-  uint32_t ulArg = xIsHC ? ulSector : ulSector * SECTOR_SIZE;
-  uint32_t *pulBuf = (uint32_t *)pvBuf;
+  uint32_t arg = is_high_capacity ? sector : sector * SECTOR_SIZE;
+  uint32_t *words = (uint32_t *)buf;
 
-  if (ulCount == 1) {
-    pxEMMC->BLKSIZECNT = (1u << 16) | SECTOR_SIZE;
-    if (emmc_send_command(CMD17, ulArg) != E_OK) {
+  if (count == 1) {
+    emmc_regs->BLKSIZECNT = (1u << 16) | SECTOR_SIZE;
+    if (emmc_send_command(CMD17, arg) != E_OK) {
       return E_CMD;
     }
     if (emmc_wait_interrupt(INT_READ_RDY, 2000) != E_OK) {
       return E_TIMED_OUT;
     }
     for (uint32_t i = 0; i < SECTOR_SIZE / 4; i++) {
-      pulBuf[i] = pxEMMC->DATA;
+      words[i] = emmc_regs->DATA;
     }
   }
   else {
-    pxEMMC->BLKSIZECNT = (ulCount << 16) | SECTOR_SIZE;
-    if (emmc_send_command(CMD18, ulArg) != E_OK) {
+    emmc_regs->BLKSIZECNT = (count << 16) | SECTOR_SIZE;
+    if (emmc_send_command(CMD18, arg) != E_OK) {
       return E_CMD;
     }
-    for (uint32_t b = 0; b < ulCount; b++) {
+    for (uint32_t b = 0; b < count; b++) {
       if (emmc_wait_interrupt(INT_READ_RDY, 2000) != E_OK) {
         return E_TIMED_OUT;
       }
       for (uint32_t i = 0; i < SECTOR_SIZE / 4; i++) {
-        pulBuf[b * (SECTOR_SIZE / 4) + i] = pxEMMC->DATA;
+        words[b * (SECTOR_SIZE / 4) + i] = emmc_regs->DATA;
       }
     }
   }
@@ -501,55 +560,55 @@ StatusCode emmc_read_blocks(uint32_t ulSector, void *pvBuf, uint32_t ulCount)
   return E_OK;
 }
 
-StatusCode emmc_write_blocks(uint32_t ulSector, const void *pvBuf, uint32_t ulCount)
+StatusCode emmc_write_blocks(uint32_t sector, const void *buf, uint32_t count)
 {
-  if (ulCount == 0) {
+  if (count == 0) {
     return E_OK;
   }
 
   // Hard floor: firmware must never write below the firmware region.
-  if (ulSector < EMMC_FIRMWARE_FLOOR) {
+  if (sector < EMMC_FIRMWARE_FLOOR) {
     uart_printf("emmc: BLOCKED write to reserved sector %u (floor %u)\r\n",
-                ulSector, (uint32_t)EMMC_FIRMWARE_FLOOR);
+                sector, (uint32_t)EMMC_FIRMWARE_FLOOR);
     return E_INVALID_ARGS;
   }
 
   // Multi-block writes go through ADMA2 when supported; fall back to PIO on any
   // failure. (The floor guard above already gated the sector for both paths.)
-  if (s_adma2_supported && (ulCount > 1)) {
-    if (emmc_xfer_adma2(CMD25, ulSector, pvBuf, ulCount, 1) == E_OK) {
+  if (s_adma2_supported && (count > 1)) {
+    if (emmc_xfer_adma2(CMD25, sector, buf, count, 1) == E_OK) {
       return E_OK;
     }
     emmc_reset_cmd_data();
     uart_print("emmc: ADMA2 write -> PIO fallback\r\n");
   }
 
-  uint32_t ulArg = xIsHC ? ulSector : ulSector * SECTOR_SIZE;
-  const uint32_t *pulBuf = (const uint32_t *)pvBuf;
+  uint32_t arg = is_high_capacity ? sector : sector * SECTOR_SIZE;
+  const uint32_t *words = (const uint32_t *)buf;
 
-  if (ulCount == 1) {
-    pxEMMC->BLKSIZECNT = (1u << 16) | SECTOR_SIZE;
-    if (emmc_send_command(CMD24, ulArg) != E_OK) {
+  if (count == 1) {
+    emmc_regs->BLKSIZECNT = (1u << 16) | SECTOR_SIZE;
+    if (emmc_send_command(CMD24, arg) != E_OK) {
       return E_CMD;
     }
     if (emmc_wait_interrupt(INT_WRITE_RDY, 2000) != E_OK) {
       return E_TIMED_OUT;
     }
     for (uint32_t i = 0; i < SECTOR_SIZE / 4; i++) {
-      pxEMMC->DATA = pulBuf[i];
+      emmc_regs->DATA = words[i];
     }
   }
   else {
-    pxEMMC->BLKSIZECNT = (ulCount << 16) | SECTOR_SIZE;
-    if (emmc_send_command(CMD25, ulArg) != E_OK) {
+    emmc_regs->BLKSIZECNT = (count << 16) | SECTOR_SIZE;
+    if (emmc_send_command(CMD25, arg) != E_OK) {
       return E_CMD;
     }
-    for (uint32_t b = 0; b < ulCount; b++) {
+    for (uint32_t b = 0; b < count; b++) {
       if (emmc_wait_interrupt(INT_WRITE_RDY, 2000) != E_OK) {
         return E_TIMED_OUT;
       }
       for (uint32_t i = 0; i < SECTOR_SIZE / 4; i++) {
-        pxEMMC->DATA = pulBuf[b * (SECTOR_SIZE / 4) + i];
+        emmc_regs->DATA = words[b * (SECTOR_SIZE / 4) + i];
       }
     }
   }

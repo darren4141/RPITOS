@@ -8,31 +8,7 @@
 #define SECTOR_SIZE                   512
 #define BYTES_TO_SECTORS(x) ((x) + SECTOR_SIZE - 1) / SECTOR_SIZE
 
-// eMMC sector layout — PHYSICAL LBA, must match the on-disk MBR partition table
-// (verify with `sudo fdisk -lu /dev/sdX`). All firmware lives ABOVE the FAT boot
-// partition so raw dd/DFU writes can never corrupt the files the GPU reads.
-//
-// LBA 0        - 16383     : MBR + alignment gap
-// LBA 16384    - 1064959   : Partition 1 — FAT32 boot (512 MB). Holds
-// start4.elf, fixup4.dat, *.dtb, config.txt,
-// bootstrap.img. GPU reads these BY NAME.
-// *** Never write raw sectors in this range. ***
-// LBA 1064960  - end       : Partition 2 — repurposed as the raw firmware
-// region (was a leftover Linux partition). Laid out:
-//
-// +0      (1064960) - +511    : Bootloader slot A  (header @ base, binary @ +1)
-// +512    (1065472) - +1023   : Bootloader slot B  (reserved)
-// +1024   (1065984)          : Metadata           (active-slot + WDT state)
-// +1025   (1065985) - +2047   : reserved          (metadata growth)
-// +2048   (1067008) - +18431  : App slot A         (header @ base, binary @ +1)
-// +18432  (1083392) - +34815  : App slot B
-//
-// App slots are A/B: DFU writes the inactive slot, then metadata flips the
-// active slot. The inactive slot doubles as the DFU staging area.
-//
-// NOTE: EMMC_FW_BASE is the start LBA of partition 2. If you ever repartition,
-// update it to match fdisk — everything below is relative to it.
-
+// eMMC sector layout — see docs.md for the full partition/slot map.
 #define EMMC_FW_BASE                  1064960U                // partition-2 start LBA
 
 #define EMMC_SECTOR_BOOTLOADER        (EMMC_FW_BASE + 0U)     // header; binary at +1
@@ -108,10 +84,10 @@ typedef struct {
   uint32_t SPI_INT_SPT;     // 0xF0
   uint32_t _pad4[2];
   uint32_t SLOTISR_VER;     // 0xFC
-} EMMC2Regs_t;
+} EMMC2Regs;
 
-static volatile EMMC2Regs_t * const pxEMMC =
-  (volatile EMMC2Regs_t *)EMMC2_BASE;
+static volatile EMMC2Regs * const emmc_regs =
+  (volatile EMMC2Regs *)EMMC2_BASE;
 
 // CONTROL1
 #define CTRL1_CLK_INTLEN       (1 << 0)    // internal clock enable
@@ -243,8 +219,21 @@ static volatile EMMC2Regs_t * const pxEMMC =
 #define DEVICE_TYPE_HS400_18V  (1u << 6)  // HS400 200 MHz DDR 1.8V
 #define DEVICE_TYPE_HS400_12V  (1u << 7)  // HS400 200 MHz DDR 1.2V
 
+/**
+ * @brief Bring up the eMMC controller: reset, clock to 400 kHz, CMD0-CMD7 init sequence, then negotiate bus width/speed.
+ * @note Idempotent — returns immediately if a previous boot stage already left the clock enabled and stable.
+ */
 StatusCode emmc_init( void );
-StatusCode emmc_read_blocks( uint32_t ulSector, void *pvBuf, uint32_t ulCount );
-StatusCode emmc_write_blocks( uint32_t ulSector, const void *pvBuf, uint32_t ulCount );
+
+/**
+ * @brief Read count sectors starting at sector into buf, via ADMA2 when available, falling back to PIO.
+ */
+StatusCode emmc_read_blocks( uint32_t sector, void *buf, uint32_t count );
+
+/**
+ * @brief Write count sectors starting at sector from buf, via ADMA2 when available, falling back to PIO.
+ * @note Refuses to write below EMMC_FIRMWARE_FLOOR.
+ */
+StatusCode emmc_write_blocks( uint32_t sector, const void *buf, uint32_t count );
 
 #endif

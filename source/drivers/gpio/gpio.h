@@ -14,13 +14,13 @@ typedef enum {
   GPIO_FUNC_ALT3   = 0b111,      // 7
   GPIO_FUNC_ALT4   = 0b011,      // 3
   GPIO_FUNC_ALT5   = 0b010,      // 2
-} GPIOFunc_t;
+} GPIOFunc;
 
 typedef enum {
   GPIO_PULL_NONE = 0b00,
   GPIO_PULL_UP   = 0b01,
   GPIO_PULL_DOWN = 0b10,
-} GPIOPull_t;
+} GPIOPull;
 
 typedef struct {
   volatile uint32_t GPFSEL[6];   // 0x00–0x14  function select (6 regs, 10 pins each)
@@ -46,14 +46,33 @@ typedef struct {
   volatile uint32_t GPAFEN[2];   // 0x88–0x8C  async falling edge detect
   volatile uint32_t PAD10[21];   // 0x90–0xE0  reserved (includes legacy GPPUD)
   volatile uint32_t GPPUPPDN[4]; // 0xE4–0xF0  pull up/down control (BCM2711)
-} GPIORegs_t;
+} GPIORegs;
 
-#define GPIO ((GPIORegs_t *)GPIO_BASE)
+#define GPIO ((GPIORegs *)GPIO_BASE)
 
-void gpio_set_function(uint32_t pin, GPIOFunc_t funct);
-void gpio_set_pull(uint8_t pin, GPIOPull_t pull);
+/**
+ * @brief Set a pin's alternate function (input, output, or ALT0–ALT5).
+ */
+void gpio_set_function(uint32_t pin, GPIOFunc funct);
+
+/**
+ * @brief Set a pin's internal pull-up/pull-down/none.
+ */
+void gpio_set_pull(uint8_t pin, GPIOPull pull);
+
+/**
+ * @brief Drive a pin high.
+ */
 void gpio_on(uint32_t pin);
+
+/**
+ * @brief Drive a pin low.
+ */
 void gpio_off(uint32_t pin);
+
+/**
+ * @brief Read a pin's current input level.
+ */
 uint8_t gpio_read(uint32_t pin);
 
 #endif

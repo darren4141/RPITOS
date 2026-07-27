@@ -45,7 +45,7 @@ static uint8_t s_sector_buf[SECTOR_SIZE] __attribute__((aligned(4)));
 // CRC32 over every field of the struct except the trailing crc field itself.
 static uint32_t wdt_meta_compute_crc(const WdtMeta *m)
 {
-  CRC32_t ctx;
+  CRC32 ctx;
   crc32_start(&ctx);
   crc32_update(&ctx, (const uint8_t *)m, offsetof(WdtMeta, crc));
   return crc32_finish(&ctx);

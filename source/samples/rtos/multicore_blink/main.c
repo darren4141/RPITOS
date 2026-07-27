@@ -1,18 +1,4 @@
-/*
- * multicore_blink — minimal AMP demo
- *
- * Core 0 runs the RTOS: it starts the UART task and sends periodic UART
- * messages from a scheduled task. Core 0 also releases secondary core 1 (via
- * smp_start_core), which runs a bare, kernel-free loop blinking an LED on
- * GPIO 21.
- *
- * This proves the AMP bring-up path end to end: secondary release from the
- * bootstrap parking loop, per-core HYP-exit/cache-disable/stack (done in the
- * bootstrap startup), and a secondary touching a peripheral correctly.
- *
- * Scope: AMP, one secondary, no shared writable state, busy-loop delay on the
- * secondary (no per-core timer/GIC yet). See md/amp_multicore_plan.md.
- */
+// See README.md for what this sample demonstrates.
 
 #include "dfu_trigger.h"
 #include "gentimer.h"
@@ -36,11 +22,8 @@ static const uint32_t hz = 1000;   // 1 kHz tick
 
 static TaskControlBlock *tcb_uart = NULL;
 
-// ── Core 1 entry (AMP) ───────────────────────────────────────────────────────
-// Runs forever on the secondary core. No kernel calls, no shared state; a
-// busy-loop delay keeps it free of the timer/GIC so this milestone needs no
-// per-core interrupt setup. The core's caches were disabled in the bootstrap
-// secondary path, so these GPIO MMIO writes reach the pin.
+// ── Core 1 entry (AMP)
+// Runs forever on the secondary core.
 static void core1_blink(void)
 {
   gpio_set_function(LED_PIN_CORE1, GPIO_FUNC_OUTPUT);
@@ -54,24 +37,16 @@ static void core1_blink(void)
   }
 }
 
-// ── Core 0 UART task (RTOS) ──────────────────────────────────────────────────
+// Core 0 UART task (RTOS)
 // Sends a periodic message over the UART task (DMA TX). uart_printf is task-safe.
 static void core0_uart_task(void *params)
 {
   (void)params;
-  // gpio_set_function(LED_PIN_CORE1, GPIO_FUNC_OUTPUT);
   uint32_t count = 0;
   while (1) {
-    uart_printf("core 0: message %u @ %u ms (stack free=%u words)\r\n", count++,
-                (uint32_t)scheduler_get_tick_count(),
-                task_stack_free_words(tcb_uart));
+    uart_printf("core 0: message %u @ %u ms\r\n", count++,
+                (uint32_t)scheduler_get_tick_count());
     task_delay_ms(1000U);
-    // gpio_on(LED_PIN_CORE1);
-    // for (volatile uint32_t i = 0; i < 200000U; i++) {
-    // }
-    // gpio_off(LED_PIN_CORE1);
-    // for (volatile uint32_t i = 0; i < 200000U; i++) {
-    // }
   }
 }
 
@@ -80,17 +55,13 @@ void kmain(void)
   jtag_gpio_init();
 
   uart_init(UART_BAUDRATE_115200);
-  uart_print("\r\n=== multicore_blink (AMP) NEW APP===\r\n"
+  uart_print("\r\n=== multicore_blink (AMP) ===\r\n"
              "core 0: RTOS + periodic UART messages\r\n"
              "core 1: bare loop + LED on GPIO 16\r\n\r\n");
 
   scheduler_init(&clk_freq, hz, &tick_count);
   uart_task_start();
 
-  // Software-timer subsystem must be initialized/started before watchdog_task_start
-  // (it arms a confirm timer) and before schedulerStart(). Matches every other
-  // RTOS sample — added here to test whether its absence was the differentiator
-  // between multicore_blink (fails) and the other samples (all pass).
   software_timer_init();
   software_timer_start();
 
@@ -102,11 +73,8 @@ void kmain(void)
   gic_init();
   gentimer_init(&clk_freq, hz);
 
-  // Running-app DFU trigger: watch UART RX for DF 00 DF 00 and reboot into the
-  // bootloader's DFU mode.
-  dfu_trigger_reset();
-  dfu_trigger_task_start();
-  uart_rx_irq_enable(dfu_trigger_feed_isr);
+  // DFU recovery is wired up automatically now (scheduler_init() + uart_task_start()) —
+  // no per-app call needed. See dfu_trigger.h.
 
   // A/B trial boot: confirm this app slot now that init succeeded.
   wdt_meta_confirm_slot();
@@ -125,5 +93,5 @@ void kmain(void)
 
   __asm__ volatile ("cpsie i" ::: "memory");
 
-  schedulerStart();
+  scheduler_start();
 }

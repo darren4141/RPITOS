@@ -23,9 +23,10 @@ static bool started;
 static bool is_self_update;
 static uint32_t dfu_base_sector;   // header sector of the slot being written
 
+// Helper function to receive one dfu packet at a time and pack it into a struct. also returns timeout error code
 static StatusCode dfu_packet_receive(DFU_Packet *packet)
 {
-  Packet_State state = PACKET_STATE_START;
+  PacketState state = PACKET_STATE_START;
   while (state != PACKET_STATE_SUCCESS) {
     uint8_t byte = uart_rx();
     switch (state) {
@@ -122,6 +123,8 @@ StatusCode dfu_receive()
 {
   dfu_init();
   dfu_trigger_reset();
+
+  // Wait for the DFU trigger key
   while (1) {
     uint8_t byte = uart_rx();
     if (dfu_trigger_feed(byte)) {
@@ -131,18 +134,18 @@ StatusCode dfu_receive()
     }
   }
 
-  DFU_State state = DFU_STATE_START;
+  DfuState state = DFU_STATE_START;
 
   uint32_t img_expected_crc;
   uint32_t img_length = 0;
   uint32_t bytes_hashed = 0;
-  CRC32_t crc_ctx;
+  CRC32 crc_ctx;
 
   while (state != DFU_STATE_DONE && state != DFU_STATE_ABORT) {
     DFU_Packet packet;
     if (dfu_packet_receive(&packet) != E_OK) {
       // Timed out mid-transfer. We were writing the *inactive* slot, so the
-      // active slot is untouched — just abandon without committing the flip.
+      // active slot is untouched - just abandon without committing the flip.
       uart_print("DFU: session timed out\r\n");
       return E_TIMED_OUT;
     }
@@ -298,12 +301,12 @@ StatusCode dfu_receive()
 
       // App update landed in the inactive slot. The in-flight CRC only proves
       // the transfer was intact, not that the bytes actually committed to eMMC
-      // — so validate by reading the slot back before flipping to it.
+      // - so validate by reading the slot back before flipping to it.
       uint32_t new_slot = APP_SLOT_OTHER(wdt_meta.active_app_slot);
-      if (boot_validateApp(APP_SLOT_TO_SECTOR(new_slot)) != E_OK) {
+      if (boot_validate_app(APP_SLOT_TO_SECTOR(new_slot)) != E_OK) {
         uart_print("DFU: new slot failed read-back validation, not committing\r\n");
         uart_tx_raw(DFU_NACK);
-        state = DFU_STATE_ABORT;   // active slot untouched — nothing to roll back
+        state = DFU_STATE_ABORT;   // active slot untouched - nothing to roll back
         break;
       }
 
@@ -312,8 +315,8 @@ StatusCode dfu_receive()
       // the app's vector-table region, i.e. the first firmware sector. Read it
       // back from eMMC rather than trusting the in-flight stream.
       uint8_t marker_sector[SECTOR_SIZE] __attribute__((aligned(4)));
-      if (emmc_read_blocks(APP_SLOT_TO_SECTOR(new_slot) + 1U, marker_sector, 1U) != E_OK ||
-          *(const uint32_t *)&marker_sector[DFU_APP_MARKER_OFFSET] != DFU_APP_MAGIC) {
+      if ((emmc_read_blocks(APP_SLOT_TO_SECTOR(new_slot) + 1U, marker_sector, 1U) != E_OK)
+          || (*(const uint32_t *)&marker_sector[DFU_APP_MARKER_OFFSET] != DFU_APP_MAGIC)) {
         uart_print("DFU: image missing DFU-support marker, refusing to commit\r\n");
         uart_tx_raw(DFU_NACK);
         state = DFU_STATE_ABORT;   // active slot untouched — nothing to roll back

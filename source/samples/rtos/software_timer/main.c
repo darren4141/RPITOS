@@ -1,22 +1,4 @@
-/*
- * software_timer — software timer demo
- *
- * Exercises the software-timer subsystem on top of the scheduler tick. Five
- * statically-allocated timers are armed from a control task:
- *
- *   heartbeat (250 ms, periodic)  — toggles the LED on GPIO 16
- *   fast      (500 ms, periodic)  — prints
- *   medium    (1 s,   periodic)   — prints
- *   slow      (2 s,   periodic)   — prints
- *   one-shot  (5 s,   one-shot)   — prints once, then never again
- *
- * At 8 s the control task stops the fast timer and resets the slow timer, so
- * the effect of software_timer_stop()/software_timer_reset() is visible in the
- * log. Callbacks run in the software-timer service task (TASK_PRIORITY_5).
- *
- * Only the uart, dfu-trigger, and watchdog tasks are pulled in besides the
- * timer subsystem itself.
- */
+// See README.md for the timer schedule and what this sample demonstrates.
 
 #include "boot_flags.h"
 #include "dfu_trigger.h"
@@ -187,7 +169,7 @@ void kmain(void)
   uart_task_start();
 
   // Software-timer subsystem must be initialized/started before watchdog_task_start
-  // (it arms a confirm timer) and before schedulerStart().
+  // (it arms a confirm timer) and before scheduler_start().
   software_timer_init();
   software_timer_start();
 
@@ -199,14 +181,13 @@ void kmain(void)
 
   gic_init();
   gentimer_init(&clk_freq, hz);
-  dfu_trigger_reset();
-  dfu_trigger_task_start();                    // semaphore-blocked reboot task
-  uart_rx_irq_enable(dfu_trigger_feed_isr);    // RX IRQ signals the reboot task
+  // DFU recovery is wired up automatically now (scheduler_init() + uart_task_start()) —
+  // no per-app call needed. See dfu_trigger.h.
 
   // A/B trial boot: confirm this app slot now that init succeeded.
   wdt_meta_confirm_slot();
 
   __asm__ volatile ("cpsie i" ::: "memory");
 
-  schedulerStart();
+  scheduler_start();
 }

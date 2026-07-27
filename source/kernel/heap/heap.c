@@ -5,17 +5,17 @@
 #define HEAP_SIZE_BYTES 262144   // 256KB
 
 static uint8_t heap[HEAP_SIZE_BYTES];
-static uint32_t heapOffset = 0;
+static uint32_t heap_offset = 0;
 
 void *heap_malloc(uint32_t size)
 {
   size = (size + 3) & ~0b11;
 
-  if (heapOffset + size > HEAP_SIZE_BYTES) {
+  if (heap_offset + size > HEAP_SIZE_BYTES) {
     return NULL;
   }
 
-  void *blockStart = &heap[heapOffset];
-  heapOffset += size;
-  return blockStart;
+  void *block_start = &heap[heap_offset];
+  heap_offset += size;
+  return block_start;
 }

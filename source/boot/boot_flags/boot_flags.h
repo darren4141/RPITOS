@@ -15,17 +15,21 @@ typedef enum {
 typedef struct {
   uint32_t magic;           // BOOT_FLAGS_MAGIC when valid
   uint32_t reset_reason;    // ResetReason
-  uint32_t dfu_requested;   // non-zero → enter DFU on next boot
-  uint32_t fw_crc_ok;       // non-zero → bootloader verified firmware CRC
+  uint32_t dfu_requested;   // non-zero -> enter DFU on next boot
+  uint32_t fw_crc_ok;       // non-zero -> bootloader verified firmware CRC
 } BootFlags;
 
 // Placed at 0x88000 - shared physical RAM
 extern volatile BootFlags boot_flags;
 
-// Called by bootloader: sets magic
+/**
+ * @brief Check the magic word; reset boot_flags to defaults if it's missing.
+ */
 void boot_flags_init(void);
 
-// Called by kernel: returns non-zero if bootloader populated the struct
+/**
+ * @brief Return non-zero if the bootloader populated the struct this boot.
+ */
 int boot_flags_valid(void);
 
 #endif

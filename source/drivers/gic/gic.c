@@ -42,17 +42,8 @@ void gic_init(void)
   // 6. Enable CPU interface
   gicc[GICC_CTLR] = 1;
 
-  // 7. Route nCNTPNSIRQ to Core 0 IRQ via the ARM Local controller.
-  //
-  // The ARM Local path BYPASSES the GIC security model.  Using GIC PPI 30
-  // alone requires PPI 30 to be in Group 1 (non-secure) in GICD_IGROUPR,
-  // which only secure firmware can guarantee.  If it's Group 0 the GIC
-  // silently ignores non-secure ISENABLER writes and the interrupt never
-  // arrives.  The ARM Local path has no such restriction.
-  //
-  // The IRQ handler checks Core0 IRQ Source (0xFF800060) bit 1 instead of
-  // GICC_IAR to dispatch the timer.  No GICC_IAR/GICC_EOIR needed for this
-  // path — the interrupt de-asserts automatically once CNTP_CVAL > CNTPCT.
+  // 7. Route nCNTPNSIRQ to Core 0 IRQ via the ARM Local controller, not the
+  // GIC's own PPI 30 path — see docs.md for why.
   CORE_TIMER_IRQCNTL(0) |= (1 << 1);   // nCNTPNSIRQ → Core0 IRQ
 
   __asm__ volatile ("dsb sy" ::: "memory");

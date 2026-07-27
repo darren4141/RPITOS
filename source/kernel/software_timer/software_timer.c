@@ -151,7 +151,7 @@ StatusCode software_timer_create(SoftwareTimer *software_timer, uint64_t period,
   software_timer->next = NULL;
 
   // Arm immediately only if the scheduler is already running (i.e. we are being
-  // called from a task). If created during boot before schedulerStart(), leave
+  // called from a task). If created during boot before scheduler_start(), leave
   // the timer unarmed — the caller starts it later with software_timer_reset().
   if (scheduler_get_current_task() != NULL) {
     uint32_t cpsr = enter_critical();

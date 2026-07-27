@@ -18,7 +18,7 @@ void dma_channel_init(uint8_t channel)
   DMA_ENABLE |= (1U << channel);
   __asm__ volatile ("dsb sy" ::: "memory");
 
-  volatile DmaChannelRegs_t *ch = DMA_CHANNEL(channel);
+  volatile DmaChannelRegs *ch = DMA_CHANNEL(channel);
 
   // Full reset, then wait for the RESET bit to self-clear.
   ch->CS = DMA_CS_RESET;
@@ -32,9 +32,9 @@ void dma_channel_init(uint8_t channel)
   __asm__ volatile ("dsb sy" ::: "memory");
 }
 
-void dma_start(uint8_t channel, const DmaControlBlock_t *cb)
+void dma_start(uint8_t channel, const DmaControlBlock *cb)
 {
-  volatile DmaChannelRegs_t *ch = DMA_CHANNEL(channel);
+  volatile DmaChannelRegs *ch = DMA_CHANNEL(channel);
 
   // Clear stale completion/interrupt latches from a previous transfer.
   ch->CS = DMA_CS_END | DMA_CS_INT;
@@ -51,7 +51,7 @@ void dma_start(uint8_t channel, const DmaControlBlock_t *cb)
 
 StatusCode dma_wait(uint8_t channel, uint32_t spin_limit)
 {
-  volatile DmaChannelRegs_t *ch = DMA_CHANNEL(channel);
+  volatile DmaChannelRegs *ch = DMA_CHANNEL(channel);
 
   while ((ch->CS & DMA_CS_ACTIVE) && spin_limit) {
     spin_limit--;
@@ -72,7 +72,7 @@ StatusCode dma_wait(uint8_t channel, uint32_t spin_limit)
 
 static uint8_t s_dma_src[DMA_SELFTEST_LEN] __attribute__((aligned(32)));
 static uint8_t s_dma_dst[DMA_SELFTEST_LEN] __attribute__((aligned(32)));
-static DmaControlBlock_t s_dma_cb __attribute__((aligned(32)));
+static DmaControlBlock s_dma_cb __attribute__((aligned(32)));
 
 StatusCode dma_selftest(uint8_t channel)
 {
@@ -92,7 +92,7 @@ StatusCode dma_selftest(uint8_t channel)
   dma_start(channel, &s_dma_cb);
 
   StatusCode st = dma_wait(channel, 1000000U);
-  volatile DmaChannelRegs_t *ch = DMA_CHANNEL(channel);
+  volatile DmaChannelRegs *ch = DMA_CHANNEL(channel);
   uart_printf("dma: selftest ch%u alias=0x%08X CS=0x%08X DEBUG=0x%08X st=%d\r\n",
               channel, DMA_BUS_ALIAS, ch->CS, ch->DEBUG, st);
 

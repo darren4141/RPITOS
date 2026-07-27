@@ -19,7 +19,7 @@ StatusCode boot_init()
   return E_OK;
 }
 
-StatusCode boot_validateApp(uint32_t app_sector)
+StatusCode boot_validate_app(uint32_t app_sector)
 {
   emmc_read_blocks(app_sector, current_sector, 1U);
   const StartPacket *start_pkt = (const StartPacket *)current_sector;
@@ -32,7 +32,7 @@ StatusCode boot_validateApp(uint32_t app_sector)
   uint32_t expected_crc = start_pkt->crc;
   uint32_t sector = app_sector + 1;
 
-  CRC32_t ctx;
+  CRC32 ctx;
   crc32_start(&ctx);
 
   while (remaining > 0) {
@@ -44,12 +44,12 @@ StatusCode boot_validateApp(uint32_t app_sector)
   }
 
   uint32_t actual_crc = crc32_finish(&ctx);
-  uart_printf("boot_validateApp CRC | Expected: 0x%08X | Actual: 0x%08X\r\n", expected_crc, actual_crc);
+  uart_printf("boot_validate_app CRC | Expected: 0x%08X | Actual: 0x%08X\r\n", expected_crc, actual_crc);
 
   return (actual_crc == expected_crc) ? E_OK : E_CORRUPTED;
 }
 
-StatusCode boot_loadApp(uint32_t app_sector)
+StatusCode boot_load_app(uint32_t app_sector)
 {
   uart_print("Loading app");
 
@@ -60,58 +60,43 @@ StatusCode boot_loadApp(uint32_t app_sector)
 
   uart_printf("App details: version: %u length: %uB\r\n", start_pkt->version_num, start_pkt->fw_length);
 
-  uint32_t ulSectors = BYTES_TO_SECTORS(start_pkt->fw_length);
+  uint32_t sectors = BYTES_TO_SECTORS(start_pkt->fw_length);
 
-  // Time the bulk read (this is the transfer ADMA2 accelerates). CNTPCT/CNTFRQ
-  // are accessible at EL1 — startup.s enables PL1PCEN/PL1PCTEN.
+  // Time the bulk read to see how much time ADMA2 saves
   uint32_t frq, lo, hi;
   asm volatile ("mrc  p15, 0, %0, c14, c0, 0" : "=r" (frq));
   asm volatile ("mrrc p15, 0, %0, %1, c14"   : "=r" (lo), "=r" (hi));
   uint64_t t_start = ((uint64_t)hi << 32) | lo;
 
-  emmc_read_blocks(app_sector + 1, (void *)APP_START_ADDR, ulSectors);
+  emmc_read_blocks(app_sector + 1, (void *)APP_START_ADDR, sectors);
 
   asm volatile ("mrrc p15, 0, %0, %1, c14" : "=r" (lo), "=r" (hi));
   uint64_t t_end = ((uint64_t)hi << 32) | lo;
 
-  uint64_t bytes = (uint64_t)ulSectors * SECTOR_SIZE;
-  uint32_t us    = (frq != 0) ? (uint32_t)((t_end - t_start) * 1000000ULL / frq) : 0;
-  uint32_t kbps  = (us != 0) ? (uint32_t)(bytes * 1000000ULL / ((uint64_t)us * 1024)) : 0;
+  uint64_t bytes = (uint64_t)sectors * SECTOR_SIZE;
+  uint32_t us = (frq != 0) ? (uint32_t)((t_end - t_start) * 1000000ULL / frq) : 0;
+  uint32_t kbps = (us != 0) ? (uint32_t)(bytes * 1000000ULL / ((uint64_t)us * 1024)) : 0;
   uart_printf("boot: loaded %u sectors (%uB) in %u us (%u KB/s)\r\n",
-              ulSectors, (uint32_t)bytes, us, kbps);
-
-  uart_print("App hex dump (4 bytes = 1 ARM instruction):\r\n");
-  for (uint32_t i = 0; i < 4; i += 4) {
-    uart_printf("  %05x: %02X %02X %02X %02X\r\n",
-                APP_START_ADDR + i,
-                ((unsigned char *)APP_START_ADDR)[i + 0],
-                ((unsigned char *)APP_START_ADDR)[i + 1],
-                ((unsigned char *)APP_START_ADDR)[i + 2],
-                ((unsigned char *)APP_START_ADDR)[i + 3]);
-  }
-
-  // verify CRC
+              sectors, (uint32_t)bytes, us, kbps);
 
   return E_OK;
 }
 
-void boot_jumpToApp()
+void boot_jump_to_app()
 {
-  uart_print( "boot: jumping to app\r\n" );
+  uart_print("boot: jumping to app\r\n");
 
-  // Wait for PL011 TX FIFO to drain before jumping — the app's uart_init()
-  // disables the UART immediately and will return E_TIMED_OUT if FR_BUSY is
-  // still set, leaving the UART in a broken state.
+  // Wait for UART PL011 TX FIFO to drain before jumping
   while (UART0->FR & FR_BUSY) {}
 
   // disable interrupts so bootloader IRQs do not fire in the app
   asm volatile ("cpsid if" ::: "memory");
 
-  // memory barrier — ensure all memory writes are visible
+  // memory barrier - ensure all memory writes are visible
   asm volatile ("dsb sy" ::: "memory");
   asm volatile ("isb"    ::: "memory");
 
-  // jump — cast load address to a function pointer and call it
-  void (*appEntry)( void ) = (void (*)(void)) APP_START_ADDR;
-  appEntry();
+  // jump
+  void (*app_entry)(void) = (void (*)(void)) APP_START_ADDR;
+  app_entry();
 }
