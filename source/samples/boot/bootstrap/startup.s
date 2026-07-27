@@ -78,6 +78,26 @@ zero_bss$:
     mcr p15, 0, r0, c12, c0, 0
     isb
 
+    @ ---- Zero the secondary-core release mailbox before releasing them -----
+    @ mailbox[1..3] (CORE_MAILBOX_ADDR+4/8/12) is deliberately excluded from
+    @ .bss (it must survive the bootstrap -> bootloader -> app chain), so
+    @ nothing else ever initializes it. At true cold boot its content is
+    @ undefined RAM; after any earlier multicore-using app in the same power
+    @ cycle, it holds THAT app's stale entry address. Either way, _sec_park$
+    @ treats "nonzero" as "jump here now" — without this, a secondary can
+    @ blx to garbage the instant it reaches _sec_park$, before this boot's
+    @ app ever calls smp_start_core(). Must happen before the kick below:
+    @ cores 1-3 cannot execute any of our code (so cannot reach _sec_park$'s
+    @ read) until after the kick registers are written, so this write is
+    @ guaranteed to land first.
+    mov  r2, #0
+    ldr  r0, =0x88304            @ CORE_MAILBOX_ADDR + 1*4 (mailbox[1])
+    str  r2, [r0]
+    ldr  r0, =0x88308            @ mailbox[2]
+    str  r2, [r0]
+    ldr  r0, =0x8830C            @ mailbox[3]
+    str  r2, [r0]
+
     @ ---- Kick secondary cores out of the firmware armstub spin loop ----
     @ On Pi/CM4 32-bit only core 0 is dispatched to kernel7l.img; cores 1-3 are
     @ held by the armstub watching mailbox 3 in the ARM-local peripherals. Write
@@ -193,31 +213,11 @@ _sec_post_hyp$:
     ldr  r1, =0x88300            @ CORE_MAILBOX_ADDR
     add  r1, r1, r0, lsl #2      @ &mailbox[coreid]
 
-    @ ── DIAGNOSTIC: blink GPIO16 three times on entry to the park loop. ──────
-    @ Proves this core got through _secondary_boot$ (HYP exit, cache disable,
-    @ stack) and reached the park loop. Runs once, then falls into the busy-poll.
-    @ r0 = coreid, r1 = &mailbox[coreid] (both preserved). Delay is a register
-    @ loop; ~0x100000 ≈ the 200000 volatile-loop feel with caches off — tune it.
-    ldr  r3, =0xFE200000         @ GPIO base (BCM2711)
-    ldr  r4, [r3, #0x04]         @ GPFSEL1 (pins 10-19)
-    bic  r4, r4, #(7 << 18)      @ clear GPIO16 function field [20:18]
-    orr  r4, r4, #(1 << 18)      @ GPIO16 = output
-    str  r4, [r3, #0x04]
-    mov  r5, #(1 << 16)          @ GPIO16 bit mask
-    mov  r7, #3                  @ blink count
-_sec_blink$:
-    str  r5, [r3, #0x1C]         @ GPSET0 — LED on
-    ldr  r6, =0x00100000
-_sec_blink_on$:
-    subs r6, r6, #1
-    bne  _sec_blink_on$
-    str  r5, [r3, #0x28]         @ GPCLR0 — LED off
-    ldr  r6, =0x00100000
-_sec_blink_off$:
-    subs r6, r6, #1
-    bne  _sec_blink_off$
-    subs r7, r7, #1
-    bne  _sec_blink$
+    @ AMP bring-up was validated with a one-time 3-blink diagnostic on GPIO16
+    @ here (proved a secondary reached this point through HYP exit / cache
+    @ disable / stack setup). Removed now that bring-up is confirmed working;
+    @ resurrect it from git history if a future secondary-bring-up regression
+    @ needs re-proving without a UART terminal attached.
 
 _sec_park$:
     @ Busy-poll rather than WFE: cross-core SEV wakeups aren't reliably reaching

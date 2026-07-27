@@ -46,58 +46,6 @@ static void prvTaskExitTrap(void)
   }
 }
 
-// Free stack headroom in words: count intact watermark words from the bottom up
-// to the high-water line. Shrinks monotonically under a real leak; stays flat if
-// the bottom is clobbered by a stray write from elsewhere.
-uint32_t task_stack_free_words(const TaskControlBlock *tcb)
-{
-  uint32_t depth = (uint32_t)(tcb->p_EndOfStack - tcb->p_Stack + 1);
-  uint32_t freeWords = 0;
-  while (freeWords < depth && tcb->p_Stack[freeWords] == TASK_WATERMARK) {
-    freeWords++;
-  }
-  return freeWords;
-}
-
-// ── Stack-overflow guard (fault-safe direct UART) ─────────────────────────────
-static void task_puthex(uint32_t v)
-{
-  static const char h[] = "0123456789ABCDEF";
-  uart_tx_raw('0');
-  uart_tx_raw('x');
-  for (int i = 28; i >= 0; i -= 4) {
-    uart_tx_raw((uint8_t)h[(v >> i) & 0xFU]);
-  }
-}
-
-// Checks the bottom-of-stack watermark of every task. p_Stack[0] is the lowest
-// word of a task's stack (stacks grow down toward it); if it's no longer
-// TASK_WATERMARK, that task has consumed its entire stack and is overflowing
-// into whatever sits below it. Reports the culprit over UART and halts — called
-// from the scheduler tick, so it uses uart_tx_raw only (no DMA/task path).
-void task_check_stacks(void)
-{
-  for (uint16_t i = 0; i < taskCounter; i++) {
-    if (tcb_pool[i].p_Stack[0] != TASK_WATERMARK) {
-      uart_tx_quiesce();   // stop in-flight DMA so the report isn't garbled
-      // Print the clobber VALUE first — it identifies the writer (e.g. a
-      // 0xB007xxxx boot-flags constant) even if the line gets truncated.
-      const char *s = "\r\nCORRUPT val=";
-      while (*s) { uart_tx_raw((uint8_t)*s++); }
-      task_puthex(tcb_pool[i].p_Stack[0]);
-      s = " at=";
-      while (*s) { uart_tx_raw((uint8_t)*s++); }
-      task_puthex((uint32_t)&tcb_pool[i].p_Stack[0]);
-      s = " id=";
-      while (*s) { uart_tx_raw((uint8_t)*s++); }
-      task_puthex(i);
-      uart_tx_raw('\r');
-      uart_tx_raw('\n');
-      for ( ; ; ) {}
-    }
-  }
-}
-
 StatusCode task_create(TaskFunction_t taskFunction, uint16_t stack_depth, TaskPriorityLevel priority, void *taskParams, TaskControlBlock **p_task_control_block)
 {
   if (taskCounter == MAX_NUM_TASKS) {

@@ -13,13 +13,13 @@ static volatile uintptr_t *const g_core_mailbox =
 uint32_t smp_core_id(void)
 {
   uint32_t mpidr;
-  __asm__ volatile ("mrc p15, 0, %0, c0, c0, 5" : "=r"(mpidr));
+  __asm__ volatile ("mrc p15, 0, %0, c0, c0, 5" : "=r" (mpidr));
   return mpidr & 0x3U;
 }
 
 StatusCode smp_start_core(uint32_t core_id, void (*entry)(void))
 {
-  if (core_id == 0U || core_id >= SMP_MAX_CORES) {
+  if ((core_id == 0U) || (core_id >= SMP_MAX_CORES)) {
     return E_INVALID_ARGS;
   }
 

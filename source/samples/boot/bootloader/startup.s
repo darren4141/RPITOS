@@ -67,6 +67,20 @@ zero_bss$:
     mcr p15, 0, r0, c12, c0, 0
     isb
 
+    @ ---- Zero the secondary-core release mailbox before releasing them -----
+    @ Harmless if cores 1-3 already left _sec_park$ for real app code (they're
+    @ not polling this address anymore, so the write lands on nobody). Needed
+    @ for the case where this bootloader run is the first to kick them out of
+    @ the real armstub (see the matching comment in bootstrap/startup.s) — the
+    @ same read-garbage-and-blx risk applies here too.
+    mov  r2, #0
+    ldr  r0, =0x88304            @ CORE_MAILBOX_ADDR + 1*4 (mailbox[1])
+    str  r2, [r0]
+    ldr  r0, =0x88308            @ mailbox[2]
+    str  r2, [r0]
+    ldr  r0, =0x8830C            @ mailbox[3]
+    str  r2, [r0]
+
     @ ---- Kick secondary cores out of the firmware armstub spin loop ----
     @ Harmless if bootstrap already did this earlier in the same boot session —
     @ cores 1-3 have already left the armstub and are busy-polling the software
