@@ -35,8 +35,15 @@ typedef struct ListItem ListItem;
 typedef struct TaskControlBlock TaskControlBlock;
 
 typedef uint32_t StackType_t;
-typedef void (*TaskFunction_t)(void *);
 
+/**
+ * @brief Signature for a task entry function, as passed to task_create().
+ */
+typedef void (*TaskFunction)(void *);
+
+/**
+ * @brief Intrusive doubly-linked list of ListItems, used for both the per-priority ready lists and the blocked list.
+ */
 struct List {
   uint16_t num_items;
   ListItem *head;
@@ -44,6 +51,9 @@ struct List {
   ListItem *list_end;
 };
 
+/**
+ * @brief One node in a List. Each TaskControlBlock embeds two: state_list_item (ready/blocked) and event_list_item (mutex/semaphore wait).
+ */
 struct ListItem {
   ListItem *next;
   ListItem *prev;
@@ -51,15 +61,18 @@ struct ListItem {
   List *container;
 };
 
+/**
+ * @brief Per-task state: stack bounds, priority, scheduling state, and the list nodes used to place it in the scheduler's lists.
+ */
 struct TaskControlBlock {
-  volatile StackType_t *p_TopOfStack;
-  StackType_t *p_EndOfStack;
-  StackType_t *p_Stack;
-  uint16_t stackDepth;
+  volatile StackType_t *current_sp;  // live stack pointer, saved/restored on every context switch
+  StackType_t *stack_high;           // highest address in the allocated stack buffer (initial SP value)
+  StackType_t *stack_base;           // lowest address in the allocated stack buffer; used for the watermark check
+  uint16_t stack_depth;
 
-  uint16_t taskId;
+  uint16_t task_id;
 
-  volatile TaskState currentState;
+  volatile TaskState current_state;
   TaskPriorityLevel priority;
   uint64_t wakeup_time;
 

@@ -25,7 +25,7 @@ typedef struct {
   volatile uint32_t MIS;             // 0x40 — masked interrupt status
   volatile uint32_t ICR;             // 0x44 — interrupt clear register
   volatile uint32_t DMACR;           // 0x48 — DMA control (unused)
-} PL011Regs_t;
+} PL011Regs;
 
 // FR — flag register
 #define FR_TXFF             (1 << 5) // TX FIFO full  — don't write if set
@@ -59,29 +59,21 @@ typedef struct {
 #define DMACR_TXDMAE        (1 << 1) // TX DMA enable
 #define DMACR_DMAONERR      (1 << 2) // disable DMA on RX error
 
-// VideoCore bus alias of UART0->DR — the DMA controller addresses peripherals
-// via 0x7Exxxxxx, not the ARM-physical 0xFExxxxxx. DR is at offset 0x00.
+// VideoCore bus alias of UART0->DR — see docs.md.
 #define UART0_DR_BUS        0x7E201000UL
 
-// DMA Lite channel used for UART TX. If this changes, update the matching
-// `cmp r2, #119` dispatch in startup.s (INTID = 112 + channel).
+// DMA Lite channel used for UART TX — see docs.md before changing.
 #define UART_DMA_TX_CHANNEL 7
 
-// PL011 UART0 combined interrupt → GIC INTID on BCM2711.
-// Legacy VC IRQ 57 → GIC SPI 121 → INTID (96 + 57) = 153. If this changes,
-// update the matching `cmp r2, #153` dispatch in startup.s.
+// PL011 UART0 combined interrupt → GIC INTID on BCM2711 — see docs.md before changing.
 #define UART_IRQ_INTID      153
 
-// Compile-time TX path selector (full mode only). 1 = DMA-driven TX, 0 = classic
-// byte-by-byte PIO drain. Build the baseline with -DUART_TX_DMA=0 to A/B the save.
+// See docs.md for what these build-time flags do.
 #ifndef UART_MINIMAL
 #ifndef UART_TX_DMA
 #define UART_TX_DMA         1
 #endif
 
-// Compile-time TX timing instrumentation (full mode only, off by default).
-// Build with -DUART_TX_TIMING=1 to accumulate the CPU-active cycles the TX task
-// spends pushing bytes. Independent of UART_TX_DMA so all four combos measure.
 #ifndef UART_TX_TIMING
 #define UART_TX_TIMING      0
 #endif
@@ -96,39 +88,121 @@ typedef enum {
   UART_BAUDRATE_115200
 } UartBaudrate;
 
-#define UART0               ((PL011Regs_t *)UART0_BASE)
+#define UART0               ((PL011Regs *)UART0_BASE)
 
 #define UART_BUFFER_SIZE    2056
 
+/**
+ * @brief Configure the PL011 UART's GPIO pins, baud rate, and line control.
+ */
 StatusCode uart_init(UartBaudrate baudrate);
+
+/**
+ * @brief Drain the TX FIFO, disable the UART, and release its GPIO pins.
+ */
 void uart_deinit();
+
+/**
+ * @brief Block until the TX FIFO has fully drained.
+ */
 void uart_drain(void);
 
+/**
+ * @brief Transmit a single raw byte, blocking until the TX FIFO has room.
+ */
 void uart_tx_raw(uint8_t byte);
 
 #ifndef UART_MINIMAL
-StatusCode uart_task_start(void);
-void uart_send_byte(uint8_t byte);
-void uart_dma_irq_handler(void);   // called from _irq_handler on DMA TX completion
 
-// Per-byte RX callback, invoked from IRQ context for each received byte.
+/**
+ * @brief Start the ring-buffer TX task and enable RX interrupts (full mode only).
+ */
+StatusCode uart_task_start(void);
+
+/**
+ * @brief Queue a byte for transmission via the ring buffer (full mode only).
+ */
+void uart_send_byte(uint8_t byte);
+
+/**
+ * @brief TX-complete handler for the UART DMA channel.
+ * @note Called from _irq_handler on DMA TX completion.
+ */
+void uart_dma_irq_handler(void);
+
+/**
+ * @brief Signature for an app-specific RX byte callback.
+ * @note Invoked from IRQ context for each received byte.
+ */
 typedef void (*UartRxHandler)(uint8_t byte);
-// Enable the PL011 RX + RX-timeout interrupt and register the handler. Requires
-// gic_init() to have run. Replaces polling RX from the scheduler tick.
+
+/**
+ * @brief Register an additional app-specific RX handler, layered on top of the built-in DFU-trigger watch.
+ * @note uart_task_start() already enables RX interrupts and the DFU-trigger
+ * watch unconditionally — this is optional; an app that doesn't need custom
+ * RX handling doesn't need to call it.
+ */
 void uart_rx_irq_enable(UartRxHandler handler);
-void uart_rx_irq_handler(void);    // called from _irq_handler on UART RX
+
+/**
+ * @brief RX interrupt handler: drains the RX FIFO, feeds the DFU-trigger watch, and calls the registered app handler.
+ * @note Called from _irq_handler on the PL011 combined interrupt.
+ */
+void uart_rx_irq_handler(void);
+
 #if UART_TX_TIMING
-void uart_tx_timing_report(void);  // snapshot + print accumulated TX timing
-void uart_tx_timing_reset(void);   // zero the accumulators
+/**
+ * @brief Print the accumulated TX timing snapshot (UART_TX_TIMING builds only).
+ */
+void uart_tx_timing_report(void);
+
+/**
+ * @brief Zero the TX timing accumulators (UART_TX_TIMING builds only).
+ */
+void uart_tx_timing_reset(void);
+
+/**
+ * @brief Return the CPU-active cycles spent in TX so far (UART_TX_TIMING builds only).
+ */
 uint64_t uart_tx_get_active_cycles(void);
+
+/**
+ * @brief Return the number of bytes transmitted so far (UART_TX_TIMING builds only).
+ */
 uint64_t uart_tx_get_byte_count(void);
 #endif
 #endif
+
+/**
+ * @brief Read one byte, blocking until the RX FIFO is non-empty.
+ */
 uint8_t uart_rx();
+
+/**
+ * @brief Read one byte if available, without blocking.
+ * @return E_EMPTY if the RX FIFO is empty.
+ */
 StatusCode uart_rx_nonblocking(uint8_t *out);
+
+/**
+ * @brief Read one byte, blocking up to timeout_ms.
+ * @return E_TIMED_OUT if no byte arrives in time.
+ */
 StatusCode uart_rx_timed(uint8_t *out, uint32_t timeout_ms);
+
+/**
+ * @brief Write a NUL-terminated string.
+ */
 void uart_print(const char *str);
+
+/**
+ * @brief Write a printf-style formatted string. Supports %c %s %d %u %x %X %% with zero-padding and width.
+ */
 void uart_printf(const char *fmt, ...);
+
+/**
+ * @brief Print a fixed-format fault report (PC, fault address, status, kind) from a context where the normal printf path may not be safe.
+ */
 void uart_fault_report(uint32_t kind, uint32_t pc, uint32_t addr, uint32_t status);
 
 #endif

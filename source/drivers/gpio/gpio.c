@@ -1,6 +1,6 @@
 #include "gpio.h"
 
-void gpio_set_function(uint32_t pin, GPIOFunc_t funct)
+void gpio_set_function(uint32_t pin, GPIOFunc funct)
 {
   uint32_t reg = pin / 10;
   uint32_t shift = (pin % 10) * 3;
@@ -10,7 +10,7 @@ void gpio_set_function(uint32_t pin, GPIOFunc_t funct)
   GPIO->GPFSEL[reg] = val;
 }
 
-void gpio_set_pull(uint8_t pin, GPIOPull_t pull)
+void gpio_set_pull(uint8_t pin, GPIOPull pull)
 {
   uint8_t reg = pin / 16;
   uint8_t shift = (pin % 16) * 2;

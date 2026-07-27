@@ -20,6 +20,16 @@ __attribute__((weak)) void software_timer_tick(uint64_t now_tick)
   (void)now_tick;
 }
 
+// DFU reboot-task hook, called unconditionally from scheduler_init() below so
+// every app gets DFU recovery without opting in. dfu_trigger.c provides the
+// strong definition (creates the semaphore-blocked task that safely calls
+// enter_bootloader() from task context, never from the ISR that detects the
+// key); samples that do not link dfu_trigger.o fall back to this weak no-op.
+__attribute__((weak)) StatusCode dfu_trigger_task_start(void)
+{
+  return E_OK;
+}
+
 TaskControlBlock *p_task_control_block = NULL;    // global — visible to assembly
 
 static volatile uint32_t *s_clk_freq;
@@ -65,7 +75,7 @@ StatusCode scheduler_init(volatile uint32_t *p_clk_freq, uint32_t new_hz, volati
     idle_stack[i] = TASK_WATERMARK;
   }
 
-  // Initialize idle task stack — mirrors initializeTaskStack() in task.c
+  // Initialize idle task stack — mirrors task_init_stack() in task.c
   StackType_t *top = &idle_stack[IDLE_STACK_DEPTH - 1];
   *top-- = 0x00000013U;                     // SPSR: SVC mode, IRQs enabled
   *top-- = (StackType_t)idle_task_func;     // PC
@@ -75,22 +85,30 @@ StatusCode scheduler_init(volatile uint32_t *p_clk_freq, uint32_t new_hz, volati
   }
   *top = 0U;                                // R0 (params)
 
-  idle_tcb.p_Stack = idle_stack;
-  idle_tcb.p_EndOfStack = &idle_stack[IDLE_STACK_DEPTH - 1];
-  idle_tcb.p_TopOfStack = top;
-  idle_tcb.stackDepth = IDLE_STACK_DEPTH;
-  idle_tcb.taskId = 0xFFFFU;
+  idle_tcb.stack_base = idle_stack;
+  idle_tcb.stack_high = &idle_stack[IDLE_STACK_DEPTH - 1];
+  idle_tcb.current_sp = top;
+  idle_tcb.stack_depth = IDLE_STACK_DEPTH;
+  idle_tcb.task_id = 0xFFFFU;
   idle_tcb.priority = TASK_PRIORITY_IDLE;
   idle_tcb.base_priority = TASK_PRIORITY_IDLE;
   idle_tcb.mutexes_held = 0;
-  idle_tcb.currentState = TASK_STATE_READY;
+  idle_tcb.current_state = TASK_STATE_READY;
   idle_tcb.wakeup_time = 0U;
   idle_tcb.wakeup_reason = WAKEUP_REASON_NONE;
   idle_tcb.state_list_item = (ListItem) { NULL, NULL, &idle_tcb, NULL };
   idle_tcb.event_list_item = (ListItem) { NULL, NULL, &idle_tcb, NULL };
 
   TaskControlBlock *p_idle = &idle_tcb;
-  addToReadyList(&p_idle);
+  scheduler_add_to_ready_list(&p_idle);
+
+  // Every app gets DFU recovery for free — see dfu_trigger_task_start() above.
+  // Apps must NOT call this themselves anymore (it would create a second,
+  // orphaned reboot task); see dfu_trigger.h.
+  StatusCode dfu_ret = dfu_trigger_task_start();
+  if (dfu_ret != E_OK) {
+    return dfu_ret;
+  }
 
   return E_OK;
 }
@@ -101,7 +119,7 @@ TaskControlBlock *scheduler_get_current_task()
 }
 
 // Adds a task to the back of the ready list of its respective priority
-StatusCode addToReadyList(TaskControlBlock **tcb)
+StatusCode scheduler_add_to_ready_list(TaskControlBlock **tcb)
 {
   if ((tcb == NULL) || (*tcb == NULL) || ((*tcb)->priority >= NUM_TASK_PRIORITIES)) {
     return E_INVALID_ARGS;
@@ -126,13 +144,13 @@ StatusCode addToReadyList(TaskControlBlock **tcb)
   list->list_end = item;
   list->num_items++;
 
-  (*tcb)->currentState = TASK_STATE_READY;
+  (*tcb)->current_state = TASK_STATE_READY;
 
   return E_OK;
 }
 
 // Removes a task from the ready list of its respective priority
-StatusCode removeFromReadyList(TaskControlBlock **tcb)
+StatusCode scheduler_remove_from_ready_list(TaskControlBlock **tcb)
 {
   if ((tcb == NULL) || (*tcb == NULL) || ((*tcb)->priority >= NUM_TASK_PRIORITIES)) {
     return E_INVALID_ARGS;
@@ -175,22 +193,22 @@ StatusCode removeFromReadyList(TaskControlBlock **tcb)
 }
 
 // Scheduler performs a context switch, round-robin, highest priority takes precedence
-void schedulerSwitchContext(void)
+void scheduler_switch_context(void)
 {
   // Stack watermark check: the lowest word of every task stack is initialized to
   // TASK_WATERMARK and never used for real data. If it has been overwritten the
-  // stack has overflowed. Hang here so JTAG can identify the task (taskId, p_Stack).
-  if ((p_task_control_block != NULL) && (p_task_control_block->p_Stack != NULL)
-      && (p_task_control_block->p_Stack[0] != TASK_WATERMARK)) {
+  // stack has overflowed. Hang here so JTAG can identify the task (task_id, stack_base).
+  if ((p_task_control_block != NULL) && (p_task_control_block->stack_base != NULL)
+      && (p_task_control_block->stack_base[0] != TASK_WATERMARK)) {
     for ( ; ; ) {
     }
   }
 
   // If the current task used its quantum (not blocked), mark READY and advance
   // the round-robin index so the next task at the same priority runs next tick.
-  if ((p_task_control_block != NULL) && (p_task_control_block->currentState == TASK_STATE_RUNNING)) {
+  if ((p_task_control_block != NULL) && (p_task_control_block->current_state == TASK_STATE_RUNNING)) {
     if (p_task_control_block->priority < NUM_TASK_PRIORITIES) {
-      p_task_control_block->currentState = TASK_STATE_READY;
+      p_task_control_block->current_state = TASK_STATE_READY;
       List *list = &ready_list[p_task_control_block->priority];
       if (list->index != NULL) {
         list->index = (list->index->next != NULL) ? list->index->next : list->head;
@@ -202,7 +220,7 @@ void schedulerSwitchContext(void)
   for (int i = NUM_TASK_PRIORITIES - 1; i >= 0; i--) {
     if (ready_list[i].num_items > 0) {
       p_task_control_block = ready_list[i].index->owner;
-      p_task_control_block->currentState = TASK_STATE_RUNNING;
+      p_task_control_block->current_state = TASK_STATE_RUNNING;
       return;
     }
   }
@@ -211,14 +229,14 @@ void schedulerSwitchContext(void)
 }
 
 // Start the scheduler by performing a context switch and starting the first task
-StatusCode schedulerStart(void)
+StatusCode scheduler_start(void)
 {
-  schedulerSwitchContext();
+  scheduler_switch_context();
   if (p_task_control_block == NULL) {
     return E_EMPTY;
   }
 
-  startFirstTask();
+  start_first_task();
 
   return E_OK;
 }
@@ -307,11 +325,11 @@ StatusCode scheduler_remove_from_blocked_list(TaskControlBlock *tcb)
 
 // Moves tcb to a new priority level.  If the task is in a ready list (READY or
 // RUNNING state) it is relocated to the correct priority bucket.  If blocked,
-// only the priority field is updated; addToReadyList will use the new value
+// only the priority field is updated; scheduler_add_to_ready_list will use the new value
 // when the task is eventually unblocked.  Must be called inside a critical section.
 void scheduler_change_task_priority(TaskControlBlock *tcb, TaskPriorityLevel new_priority)
 {
-  TaskState saved_state = tcb->currentState;
+  TaskState saved_state = tcb->current_state;
   int in_ready = ((saved_state == TASK_STATE_READY) || (saved_state == TASK_STATE_RUNNING));
 
   if (in_ready) {
@@ -343,8 +361,8 @@ void scheduler_change_task_priority(TaskControlBlock *tcb, TaskPriorityLevel new
   tcb->priority = new_priority;
 
   if (in_ready) {
-    addToReadyList(&tcb);
-    tcb->currentState = saved_state;   // restore RUNNING if it was running when boosted
+    scheduler_add_to_ready_list(&tcb);
+    tcb->current_state = saved_state;   // restore RUNNING if it was running when boosted
   }
 }
 
@@ -353,12 +371,12 @@ static void block_until(uint64_t wakeup_time)
   volatile TaskControlBlock *my_tcb = p_task_control_block;
 
   uint32_t cpsr = enter_critical();
-  removeFromReadyList(&p_task_control_block);
+  scheduler_remove_from_ready_list(&p_task_control_block);
   scheduler_add_to_blocked_list(p_task_control_block, wakeup_time);
-  p_task_control_block->currentState = TASK_STATE_BLOCKED;
+  p_task_control_block->current_state = TASK_STATE_BLOCKED;
   exit_critical(cpsr);
 
-  while (my_tcb->currentState == TASK_STATE_BLOCKED) {}
+  while (my_tcb->current_state == TASK_STATE_BLOCKED) {}
 }
 
 void task_delay_ms(uint64_t ticks)
@@ -433,7 +451,7 @@ void __attribute__((noinline)) timer_tick_handler(void)
       ei->container = NULL;
     }
 
-    addToReadyList(&tcb);
+    scheduler_add_to_ready_list(&tcb);
   }
 
   // Expire software timers: move any due timers to the active list and signal

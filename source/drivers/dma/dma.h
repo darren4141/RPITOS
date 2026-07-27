@@ -5,17 +5,8 @@
 
 #include "status.h"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// BCM2711 legacy DMA controller (channels 0–14).
-//
-// Channels 0–6 are full "normal" engines, 7–10 are "DMA Lite" (subset, 16-bit
-// TXFR_LEN, no 2D stride), 11–14 are DMA4 (40-bit, different register layout —
-// NOT covered here). This driver targets the legacy 32-bit engines.
-//
-// IMPORTANT — the DMA controller uses VideoCore *bus* addresses, not ARM
-// physical addresses. RAM buffers and control blocks must be translated with
-// BUS_ADDRESS(); peripheral registers use their 0x7Exxxxxx bus alias.
-// ─────────────────────────────────────────────────────────────────────────────
+// BCM2711 legacy DMA controller (channels 0-14). See docs.md for the channel
+// classes and the VideoCore bus-address translation this driver needs.
 
 #define DMA_BASE 0xFE007000UL
 
@@ -30,9 +21,9 @@ typedef struct {
   volatile uint32_t STRIDE;      // 0x18 — 2D stride             (read-only mirror)
   volatile uint32_t NEXTCONBK;   // 0x1C — next control block    (read-only mirror)
   volatile uint32_t DEBUG;       // 0x20 — debug / error status
-} DmaChannelRegs_t;
+} DmaChannelRegs;
 
-#define DMA_CHANNEL(n)   ((volatile DmaChannelRegs_t *)(DMA_BASE + (uint32_t)(n) * 0x100))
+#define DMA_CHANNEL(n)   ((volatile DmaChannelRegs *)(DMA_BASE + (uint32_t)(n) * 0x100))
 #define DMA_INT_STATUS   (*(volatile uint32_t *)(DMA_BASE + 0xFE0)) // per-channel pending IRQ bits
 #define DMA_ENABLE       (*(volatile uint32_t *)(DMA_BASE + 0xFF0)) // per-channel power/enable bits
 
@@ -73,9 +64,7 @@ typedef struct {
 // BCM2711: channel N (0–7) → GIC SPI (80+N) → GIC INTID (32+80+N) = 112+N.
 #define DMA_IRQ_INTID(ch)      (112U + (uint32_t)(ch))
 
-// VideoCore bus alias for RAM. 0xC0000000 = L2-coherent alias (standard for the
-// legacy DMA controller). If the mem→mem self-test fails to move data, try the
-// 0x40000000 (L2-disabled/direct) alias instead — this is the one knob to turn.
+// VideoCore bus alias for RAM — see docs.md if the mem→mem self-test fails.
 #define DMA_BUS_ALIAS          0xC0000000U
 #define BUS_ADDRESS(a)         (((uint32_t)(uintptr_t)(a) & ~0xC0000000U) | DMA_BUS_ALIAS)
 
@@ -88,21 +77,29 @@ typedef struct {
   uint32_t stride;     // 2D stride (0 in linear mode)
   uint32_t nextconbk;  // bus address of next CB, or 0 to stop
   uint32_t reserved[2];
-} __attribute__((aligned(32))) DmaControlBlock_t;
+} __attribute__((aligned(32))) DmaControlBlock;
 
-// Power on and reset a channel. Call once before first use.
+/**
+ * @brief Power on and reset a channel. Call once before first use.
+ */
 void dma_channel_init(uint8_t channel);
 
-// Kick off the transfer described by cb on the given channel. Clears any stale
-// END/INT status first. Issues a dsb so prior buffer/CB writes are visible.
-void dma_start(uint8_t channel, const DmaControlBlock_t *cb);
+/**
+ * @brief Kick off the transfer described by cb on the given channel.
+ * @note Clears any stale END/INT status first. Issues a dsb so prior buffer/CB writes are visible.
+ */
+void dma_start(uint8_t channel, const DmaControlBlock *cb);
 
-// Spin until the channel's transfer completes (ACTIVE clears) or times out.
-// Returns E_OK, E_TIMED_OUT, or E_CORRUPTED (hardware error flagged).
+/**
+ * @brief Spin until the channel's transfer completes (ACTIVE clears) or times out.
+ * @return E_OK, E_TIMED_OUT, or E_CORRUPTED (hardware error flagged).
+ */
 StatusCode dma_wait(uint8_t channel, uint32_t spin_limit);
 
-// Bring-up self-test: a memory→memory copy that proves the controller works and
-// the BUS_ADDRESS() alias is correct. Returns E_OK if the copy verified.
+/**
+ * @brief Bring-up self-test: a memory→memory copy that proves the controller works and the BUS_ADDRESS() alias is correct.
+ * @return E_OK if the copy verified.
+ */
 StatusCode dma_selftest(uint8_t channel);
 
 #endif

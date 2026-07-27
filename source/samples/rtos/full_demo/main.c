@@ -107,7 +107,7 @@ void task_5_func(void *params)
   uint32_t count_5 = 0;
   while (1) {
     count_5++;
-    uart_printf("(%d) Task 5 | %d | %d | %d |\r\n", count_5, (uint32_t)tcb_5->p_Stack, (uint32_t)tcb_5->p_TopOfStack, (uint32_t)tcb_5->p_EndOfStack);
+    uart_printf("(%d) Task 5 | %d | %d | %d |\r\n", count_5, (uint32_t)tcb_5->stack_base, (uint32_t)tcb_5->current_sp, (uint32_t)tcb_5->stack_high);
     task_delay_ms(220);
   }
 }
@@ -167,12 +167,10 @@ void kmain(void)
   delay_init(&tick_count);
   queue_init(&test_queue, 4, sizeof(uint32_t));
   semaphore_init(&shared_semaphore, 1, 1);
-  dfu_trigger_reset();
-
+  // DFU recovery is wired up automatically now (scheduler_init() + uart_task_start()) —
+  // no per-app call needed. See dfu_trigger.h.
   dma_selftest(7);
   uart_task_start();
-  dfu_trigger_task_start();                    // semaphore-blocked reboot task
-  uart_rx_irq_enable(dfu_trigger_feed_isr);    // RX IRQ signals the reboot task
   software_timer_init();
   software_timer_start();
 
@@ -182,5 +180,5 @@ void kmain(void)
 
   __asm__ volatile ("cpsie i" ::: "memory");
 
-  schedulerStart();
+  scheduler_start();
 }

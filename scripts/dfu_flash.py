@@ -289,7 +289,7 @@ def flash(ser: "serial.Serial", image_path: str, self_update: bool = False) -> b
     print(f"Size  : {app_length} bytes")
     print()
 
-    # CRC covers the exact app bytes before padding — must match boot_validateApp()
+    # CRC covers the exact app bytes before padding — must match boot_validate_app()
     app_crc = zlib.crc32(bytes(img[:app_length])) & 0xFFFFFFFF
     print(f"CRC32 : 0x{app_crc:08X}")
 

@@ -1,41 +1,5 @@
-/*
- * mutex_inheritance — priority inheritance demo
- *
- * Three tasks contend on a single inheritance-enabled mutex:
- *
- *   LOW  (priority 1) — acquires the mutex and busy-spins for 300 ms
- *   MID  (priority 2) — never touches the mutex; prints a tick every 50 ms
- *   HIGH (priority 3) — sleeps 100 ms, then blocks on the same mutex
- *
- * Why busy-spin and not task_delay_ms while holding the mutex?
- *   task_delay_ms removes the task from the ready list (BLOCKED state).
- *   A BLOCKED task has no priority as far as the scheduler is concerned, so
- *   boosting it does nothing — MID would run freely regardless.  spin_ms keeps
- *   LOW in the READY/RUNNING state so the scheduler compares priorities every
- *   tick.
- *
- * Expected output with inheritance ON:
- *
- *   [    0] LOW : acquired (priority=1 base=1) — starting 300 ms work
- *   [    0] MID : tick 1   <-- MID runs; LOW is only priority 1
- *   [   50] MID : tick 2
- *   [  100] HIGH: blocking on mutex — LOW should be boosted to 3 now
- *   [  100] LOW : working... (priority=3 base=1)  <-- boost visible here
- *            *** MID goes silent — can't preempt LOW at priority 3 ***
- *   [  150] LOW : working... (priority=3 base=1)
- *   [  200] LOW : working... (priority=3 base=1)
- *   [  250] LOW : working... (priority=3 base=1)
- *   [  300] LOW : releasing  (priority=3 base=1)
- *   [  300] HIGH: acquired mutex ✓
- *   [  300] LOW : released   (priority=1 base=1)  <-- restored
- *   [  300] MID : tick 3    <-- MID resumes
- *   [  350] MID : tick 4
- *   ...
- *
- * Without inheritance LOW stays at priority 1, MID (priority 2) preempts it
- * every tick, and MID prints continuously even while HIGH is stuck waiting.
- * Toggle mutex_set_inheritance(&shared_mtx, 0) in kmain to observe this.
- */
+// See README.md for the scenario, expected output, and why LOW busy-spins
+// instead of using task_delay_ms while holding the mutex.
 
 #include "boot_flags.h"
 #include "dfu_trigger.h"
@@ -185,14 +149,13 @@ void kmain(void)
 
   gic_init();
   gentimer_init(&clk_freq, hz);
-  dfu_trigger_reset();
-  dfu_trigger_task_start();                    // semaphore-blocked reboot task
-  uart_rx_irq_enable(dfu_trigger_feed_isr);    // RX IRQ signals the reboot task
+  // DFU recovery is wired up automatically now (scheduler_init() + uart_task_start()) —
+  // no per-app call needed. See dfu_trigger.h.
 
   // A/B trial boot: confirm this app slot now that init succeeded.
   wdt_meta_confirm_slot();
 
   __asm__ volatile ("cpsie i" ::: "memory");
 
-  schedulerStart();
+  scheduler_start();
 }

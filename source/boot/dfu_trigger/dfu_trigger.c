@@ -18,7 +18,7 @@ int dfu_trigger_feed(uint8_t byte)
   return shift_reg == DFU_TRIGGER_KEY;
 }
 
-// ── RTOS reboot path (not compiled into the minimal bootloader) ───────────────
+// ── RTOS reboot path (not compiled into the minimal bootloader)
 #ifndef UART_MINIMAL
 
 #include <stddef.h>
@@ -59,6 +59,7 @@ static void dfu_reboot_task(void *params)
 
 StatusCode dfu_trigger_task_start(void)
 {
+  dfu_trigger_reset();
   semaphore_init(&dfu_semaphore, 1, 0);
   return task_create(dfu_reboot_task, 1024, TASK_PRIORITY_5, NULL, &dfu_tcb);
 }

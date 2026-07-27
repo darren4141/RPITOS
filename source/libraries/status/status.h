@@ -16,7 +16,10 @@ typedef enum {
   E_NOTSUPP            = 11,
 } StatusCode;
 
-// Requires uart.h to be included before use.
+/**
+ * @brief Run expr and print a warning over UART if it doesn't return E_OK.
+ * @note Requires uart.h to be included before use.
+ */
 #define STATUS_OK_OR_WARN(expr)                              \
         do {                                                       \
           StatusCode _sc = (expr);                                 \

@@ -27,27 +27,27 @@ static void crc32_hw_update(uint32_t *crc, const uint8_t *data, size_t len)
   }
 }
 
-void crc32_start(CRC32_t *ctx)
+void crc32_start(CRC32 *ctx)
 {
   ctx->crc = 0xFFFFFFFF;
 }
 
-void crc32_update(CRC32_t *ctx, const uint8_t *data, size_t len)
+void crc32_update(CRC32 *ctx, const uint8_t *data, size_t len)
 {
   crc32_hw_update(&ctx->crc, data, len);
 }
 
-void crc32_update_byte(CRC32_t *ctx, uint8_t byte)
+void crc32_update_byte(CRC32 *ctx, uint8_t byte)
 {
   crc32_update(ctx, &byte, 1);
 }
 
-uint32_t crc32_finish(CRC32_t *ctx)
+uint32_t crc32_finish(CRC32 *ctx)
 {
   return ctx->crc ^ 0xFFFFFFFF;
 }
 
-int crc32_verify(CRC32_t *ctx, uint32_t expected)
+int crc32_verify(CRC32 *ctx, uint32_t expected)
 {
   return crc32_finish(ctx) == expected;
 }

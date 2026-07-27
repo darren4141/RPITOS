@@ -60,16 +60,16 @@ StatusCode semaphore_take(Semaphore *smph, int64_t timeout_ms)
     }
 
     semaphore_add_to_blocked_list(smph, cur_tcb);
-    removeFromReadyList(&cur_tcb);
+    scheduler_remove_from_ready_list(&cur_tcb);
 
     if (timeout_ms > 0) {
       scheduler_add_to_blocked_list(cur_tcb, deadline);
     }
 
-    cur_tcb->currentState = TASK_STATE_BLOCKED;
+    cur_tcb->current_state = TASK_STATE_BLOCKED;
     exit_critical(cpsr);
 
-    while (cur_tcb->currentState == TASK_STATE_BLOCKED) {}
+    while (cur_tcb->current_state == TASK_STATE_BLOCKED) {}
 
     uint32_t cpsr2 = enter_critical();
     if (cur_tcb->wakeup_reason == WAKEUP_REASON_RESOURCE_ACQUIRED) {
@@ -101,7 +101,7 @@ StatusCode semaphore_give(Semaphore *smph)
     p_next_tcb->event_list_item.prev = NULL;
     p_next_tcb->event_list_item.container = NULL;
     p_next_tcb->wakeup_reason = WAKEUP_REASON_RESOURCE_ACQUIRED;
-    addToReadyList(&p_next_tcb);
+    scheduler_add_to_ready_list(&p_next_tcb);
   }
   else {
     if (smph->count < smph->max_count) {

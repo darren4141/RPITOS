@@ -69,7 +69,7 @@ StatusCode mutex_lock(Mutex *mtx, int64_t timeout_ms)
   }
 
   mutex_add_to_blocked_list(mtx, cur_tcb);
-  removeFromReadyList(&cur_tcb);
+  scheduler_remove_from_ready_list(&cur_tcb);
 
   if (timeout_ms > 0) {
     scheduler_add_to_blocked_list(cur_tcb, scheduler_get_tick_count() + (uint64_t)timeout_ms);
@@ -86,10 +86,10 @@ StatusCode mutex_lock(Mutex *mtx, int64_t timeout_ms)
     }
   }
 
-  cur_tcb->currentState = TASK_STATE_BLOCKED;
+  cur_tcb->current_state = TASK_STATE_BLOCKED;
   exit_critical(cpsr);
 
-  while (cur_tcb->currentState == TASK_STATE_BLOCKED) {}
+  while (cur_tcb->current_state == TASK_STATE_BLOCKED) {}
 
   uint32_t cpsr2 = enter_critical();
   StatusCode result = (mtx->mutex_owner == cur_tcb) ? E_OK : E_TIMED_OUT;
@@ -181,7 +181,7 @@ void mutex_unlock(Mutex *mtx)
     }
 
     scheduler_remove_from_blocked_list(next_owner);
-    addToReadyList(&next_owner);
+    scheduler_add_to_ready_list(&next_owner);
   }
 
   exit_critical(cpsr);

@@ -127,7 +127,7 @@ static TaskControlBlock *uart_tcb = NULL;
 static bool uart_task_started = false;
 
 #if UART_TX_DMA
-static DmaControlBlock_t uart_tx_cb __attribute__((aligned(32)));
+static DmaControlBlock uart_tx_cb __attribute__((aligned(32)));
 
 // Launch one DMA transfer of `len` bytes (one word per byte) from the ring
 // buffer to UART0->DR, paced by the UART TX DREQ. The span must be contiguous.
@@ -147,7 +147,7 @@ static void uart_dma_tx_run(const volatile uint32_t *buf, uint16_t len)
 // Called from _irq_handler when the TX DMA channel raises its completion IRQ.
 void uart_dma_irq_handler(void)
 {
-  volatile DmaChannelRegs_t *ch = DMA_CHANNEL(UART_DMA_TX_CHANNEL);
+  volatile DmaChannelRegs *ch = DMA_CHANNEL(UART_DMA_TX_CHANNEL);
   ch->CS = DMA_CS_INT;   // write-1-to-clear the channel interrupt latch
   __asm__ volatile ("dsb sy" ::: "memory");
   semaphore_give(&uart_dma_done);
@@ -155,18 +155,26 @@ void uart_dma_irq_handler(void)
 
 // ── RX interrupt (replaces polling RX from the scheduler tick) ────────────────
 
+// DFU-trigger watch hook, fed unconditionally from uart_rx_irq_handler() below
+// for every byte, on every app — see the call site for why. dfu_trigger.c
+// provides the strong definition; samples that do not link dfu_trigger.o fall
+// back to this weak no-op, so uart.c stays resolvable without forcing every
+// sample to pull it in.
+void dfu_trigger_feed_isr(uint8_t byte);
+__attribute__((weak)) void dfu_trigger_feed_isr(uint8_t byte)
+{
+  (void)byte;
+}
+
 static UartRxHandler uart_rx_handler = NULL;
 
+// Registers an ADDITIONAL app-specific RX handler on top of the built-in DFU
+// watch — it does not gate whether RX interrupts are enabled (uart_task_start()
+// always enables them) or whether the DFU key is watched for (uart_rx_irq_handler()
+// always feeds it). An app that wants no extra handling doesn't need to call this.
 void uart_rx_irq_enable(UartRxHandler handler)
 {
   uart_rx_handler = handler;
-
-  // RX FIFO threshold stays at reset default (1/8); RTIM catches the tail so a
-  // short burst (e.g. the 4-byte DFU key) is delivered without waiting to fill.
-  UART0->ICR = ICR_ALL;                  // clear any stale latched interrupts
-  UART0->IMSC |= IMSC_RXIM | IMSC_RTIM;  // enable RX-level + RX-timeout
-  irq_register(UART_IRQ_INTID, uart_rx_irq_handler);
-  gic_enable_spi(UART_IRQ_INTID, 0x80);
 }
 
 // Called from _irq_handler on the PL011 combined interrupt (RX path only —
@@ -175,6 +183,7 @@ void uart_rx_irq_handler(void)
 {
   while (!(UART0->FR & FR_RXFE)) {
     uint8_t b = (uint8_t)(UART0->DR & 0xFF);
+    dfu_trigger_feed_isr(b);   // always watch for the DFU recovery key
     if (uart_rx_handler) {
       uart_rx_handler(b);
     }
@@ -233,6 +242,17 @@ StatusCode uart_task_start(void)
   irq_register(DMA_IRQ_INTID(UART_DMA_TX_CHANNEL), uart_dma_irq_handler);
   gic_enable_spi(DMA_IRQ_INTID(UART_DMA_TX_CHANNEL), 0x80);
 #endif
+
+  // RX interrupts are always enabled here, independent of whether the app
+  // ever calls uart_rx_irq_enable() — this guarantees uart_rx_irq_handler()
+  // (and therefore the built-in DFU-trigger watch inside it) always runs, so
+  // an app can't accidentally ship without DFU recovery support.
+  // RX FIFO threshold stays at reset default (1/8); RTIM catches the tail so
+  // a short burst (e.g. the 4-byte DFU key) is delivered without waiting to fill.
+  UART0->ICR = ICR_ALL;                  // clear any stale latched interrupts
+  UART0->IMSC |= IMSC_RXIM | IMSC_RTIM;  // enable RX-level + RX-timeout
+  irq_register(UART_IRQ_INTID, uart_rx_irq_handler);
+  gic_enable_spi(UART_IRQ_INTID, 0x80);
 
   StatusCode ret = task_create(uart_tx_task, 2048, TASK_PRIORITY_5, NULL, &uart_tcb);
   if (ret == E_OK) {
@@ -307,136 +327,193 @@ void uart_print(const char *str)
 
 #endif
 
-// ── Shared: printf (both modes write to a buffer, then flush via uart_print) ──
+// ── Shared: printf (chunked sink, flushed via uart_print) ────────────────────
 
+#define PRINTF_CHUNK_SIZE 32
+#define PRINTF_NUM_BUF_SIZE 16   // widest real width in this codebase is %08X
+
+// Right-justifies the base-`base` digits of n into out, padded to at least
+// `width` characters with `pad`. Pure — no I/O — so it's also safe to call
+// from uart_fault_report() in a fault-handler context.
 static int format_uint(char *out, uint32_t n, uint32_t base, const char *digits, int width, char pad)
 {
   char tmp[10];
   int i = 0;
+
   if (n == 0) {
     tmp[i++] = '0';
   }
   else {
-    while (n > 0) { tmp[i++] = digits[n % base];n /= base; }
+    while (n > 0) {
+      tmp[i++] = digits[n % base];
+      n /= base;
+    }
   }
+
   int len = 0;
   for (int p = i; p < width; p++) {
     out[len++] = pad;
   }
-  while (i > 0) {out[len++] = tmp[--i];}
+  while (i > 0) {
+    out[len++] = tmp[--i];
+  }
   return len;
+}
+
+// Small fixed-size sink that flushes to uart_print() — one critical section
+// and one semaphore_give per flush — whenever it fills, instead of buffering
+// an entire formatted line on the caller's stack.
+typedef struct {
+  char buf[PRINTF_CHUNK_SIZE];
+  int pos;
+} PrintfSink;
+
+static void sink_flush(PrintfSink *sink)
+{
+  if (sink->pos > 0) {
+    sink->buf[sink->pos] = '\0';
+    uart_print(sink->buf);
+    sink->pos = 0;
+  }
+}
+
+static void sink_putc(PrintfSink *sink, char c)
+{
+  if (sink->pos >= (int)sizeof(sink->buf) - 1) {
+    sink_flush(sink);
+  }
+  sink->buf[sink->pos++] = c;
+}
+
+static void sink_puts(PrintfSink *sink, const char *s)
+{
+  while (*s) {
+    sink_putc(sink, *s++);
+  }
+}
+
+// Formats one padded number (%d/%u/%x/%X) and pushes it through the sink.
+static void sink_put_uint(PrintfSink *sink, uint32_t n, uint32_t base, const char *digits, int width, char pad)
+{
+  char numbuf[PRINTF_NUM_BUF_SIZE];
+  if (width > (int)sizeof(numbuf)) {
+    width = (int)sizeof(numbuf);
+  }
+
+  int len = format_uint(numbuf, n, base, digits, width, pad);
+  for (int i = 0; i < len; i++) {
+    sink_putc(sink, numbuf[i]);
+  }
 }
 
 void uart_printf(const char *fmt, ...)
 {
-  char local[256];
-  int pos = 0;
+  PrintfSink sink = { .pos = 0 };
 
   va_list args;
   va_start(args, fmt);
 
   while (*fmt) {
     if (*fmt != '%') {
-      if (pos < (int)sizeof(local) - 1) {
-        local[pos++] = *fmt;
-      }
-      fmt++;
+      sink_putc(&sink, *fmt++);
       continue;
     }
     fmt++;
+
     char pad = ' ';
     if (*fmt == '0') {
-      pad = '0';fmt++;
+      pad = '0';
+      fmt++;
     }
     int width = 0;
-    while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt++ - '0'); }
+    while (*fmt >= '0' && *fmt <= '9') {
+      width = width * 10 + (*fmt++ - '0');
+    }
+
     switch (*fmt) {
     case 'c':
-      if (pos < (int)sizeof(local) - 1) {
-        local[pos++] = (char)va_arg(args, int);
-      }
+      sink_putc(&sink, (char)va_arg(args, int));
       break;
 
     case 's': {
       const char *s = va_arg(args, const char *);
-      if (!s) {
-        s = "(null)";
-      }
-      while (*s && pos < (int)sizeof(local) - 1) {local[pos++] = *s++;}
+      sink_puts(&sink, s ? s : "(null)");
       break;
     }
 
     case 'd': {
       int32_t n = va_arg(args, int32_t);
-      if (pos + 12 < (int)sizeof(local)) {
-        if (n < 0) {
-          local[pos++] = '-';pos += format_uint(local + pos, (uint32_t)-n, 10, "0123456789", (width > 0) ? width - 1 : 0, pad);
-        }
-        else {
-          pos += format_uint(local + pos, (uint32_t)n, 10, "0123456789", width, pad);
-        }
+      if (n < 0) {
+        sink_putc(&sink, '-');
+        sink_put_uint(&sink, (uint32_t)-n, 10, "0123456789", (width > 0) ? width - 1 : 0, pad);
+      }
+      else {
+        sink_put_uint(&sink, (uint32_t)n, 10, "0123456789", width, pad);
       }
       break;
     }
 
     case 'u':
-      if (pos + 12 < (int)sizeof(local)) {
-        pos += format_uint(local + pos, va_arg(args, uint32_t), 10, "0123456789", width, pad);
-      }
+      sink_put_uint(&sink, va_arg(args, uint32_t), 10, "0123456789", width, pad);
       break;
 
     case 'x':
-      if (pos + 12 < (int)sizeof(local)) {
-        pos += format_uint(local + pos, va_arg(args, uint32_t), 16, "0123456789abcdef", width, pad);
-      }
+      sink_put_uint(&sink, va_arg(args, uint32_t), 16, "0123456789abcdef", width, pad);
       break;
 
     case 'X':
-      if (pos + 12 < (int)sizeof(local)) {
-        pos += format_uint(local + pos, va_arg(args, uint32_t), 16, "0123456789ABCDEF", width, pad);
-      }
+      sink_put_uint(&sink, va_arg(args, uint32_t), 16, "0123456789ABCDEF", width, pad);
       break;
 
     case '%':
-      if (pos < (int)sizeof(local) - 1) {
-        local[pos++] = '%';
-      }
+      sink_putc(&sink, '%');
       break;
 
     default:
-      if (pos + 1 < (int)sizeof(local) - 1) {
-        local[pos++] = '%';local[pos++] = *fmt;
-      }
+      sink_putc(&sink, '%');
+      sink_putc(&sink, *fmt);
       break;
     }
     fmt++;
   }
 
   va_end(args);
-  local[pos] = '\0';
-  uart_print(local);
+  sink_flush(&sink);
 }
 
+// Always emits exactly 8 hex digits (no leading-zero trim) via format_uint,
+// then writes them out with uart_tx_raw() directly — no ring buffer, no
+// critical section, no semaphore — so this stays safe to call from a fault
+// handler where scheduler/semaphore state may not be trustworthy.
 static void fault_puthex(uint32_t v)
 {
-  static const char hexd[] = "0123456789ABCDEF";
+  char digits[8];
+  format_uint(digits, v, 16, "0123456789ABCDEF", 8, '0');
+
   uart_tx_raw('0');
   uart_tx_raw('x');
-  for (int i = 28; i >= 0; i -= 4) {
-    uart_tx_raw((uint8_t)hexd[(v >> i) & 0xFU]);
+  for (int i = 0; i < 8; i++) {
+    uart_tx_raw((uint8_t)digits[i]);
   }
 }
 
 void uart_fault_report(uint32_t kind, uint32_t pc, uint32_t addr, uint32_t status)
 {
-  uart_tx_raw('\r');uart_tx_raw('\n');
-  uart_tx_raw('P');uart_tx_raw('C');uart_tx_raw('=');
+  uart_tx_raw('\r');
+  uart_tx_raw('\n');
+
+  uart_tx_raw('P'); uart_tx_raw('C'); uart_tx_raw('=');
   fault_puthex(pc);
-  uart_tx_raw(' ');uart_tx_raw('A');uart_tx_raw('=');
+
+  uart_tx_raw(' '); uart_tx_raw('A'); uart_tx_raw('=');
   fault_puthex(addr);
-  uart_tx_raw(' ');uart_tx_raw('S');uart_tx_raw('=');
+
+  uart_tx_raw(' '); uart_tx_raw('S'); uart_tx_raw('=');
   fault_puthex(status);
-  uart_tx_raw(' ');uart_tx_raw('K');uart_tx_raw('=');
+
+  uart_tx_raw(' '); uart_tx_raw('K'); uart_tx_raw('=');
   fault_puthex(kind);
-  uart_tx_raw('\r');uart_tx_raw('\n');
+
+  uart_tx_raw('\r');
+  uart_tx_raw('\n');
 }

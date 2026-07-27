@@ -17,12 +17,8 @@ uint64_t read_cntpct(void)
   return ((uint64_t)hi << 32) | lo;
 }
 
-/**
- * Uses the EL1 Physical timer, p15, c14
- */
 StatusCode gentimer_init(uint32_t *clk_freq, uint32_t hz)
 {
-
   if (clk_freq == NULL) {
     return E_INVALID_ARGS;
   }
