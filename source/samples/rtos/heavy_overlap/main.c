@@ -18,6 +18,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#define LED_PIN_CORE1 16U   // toggled by the bare loop on core 1
+
 static volatile bool gpio_state = true;
 
 static Queue test_queue;
@@ -36,6 +38,19 @@ static TaskControlBlock *tcb_4 = NULL;
 static TaskControlBlock *tcb_5 = NULL;
 
 static StatusCode ret;
+
+static void core1_blink(void)
+{
+  gpio_set_function(LED_PIN_CORE1, GPIO_FUNC_OUTPUT);
+  for ( ; ; ) {
+    gpio_on(LED_PIN_CORE1);
+    for (volatile uint32_t i = 0; i < 1000000U; i++) {
+    }
+    gpio_off(LED_PIN_CORE1);
+    for (volatile uint32_t i = 0; i < 1000000U; i++) {
+    }
+  }
+}
 
 void task_1_func(void *params)
 {
@@ -175,6 +190,15 @@ void kmain(void)
   dfu_trigger_reset();
   dfu_trigger_task_start();                    // semaphore-blocked reboot task
   uart_rx_irq_enable(dfu_trigger_feed_isr);    // RX IRQ signals the reboot task
+
+  // Release core 1 into its bare blink loop. Safe to call before the scheduler
+  // starts — it just publishes the entry and wakes the parked core.
+  if (smp_start_core(1U, core1_blink) == E_OK) {
+    uart_print("core 0: released core 1\r\n");
+  }
+  else {
+    uart_print("core 0: smp_start_core failed\r\n");
+  }
 
   // A/B trial boot: confirm this app slot now that init succeeded.
   wdt_meta_confirm_slot();

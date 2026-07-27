@@ -31,7 +31,7 @@ SECTIONS {
 	.stacks (NOLOAD) : {
 		. = ALIGN(8);
 		_fiq_stack_bottom = .;  . += 0x200;  _fiq_stack_top = .;
-		_irq_stack_bottom = .;  . += 0x400;  _irq_stack_top = .;
+		_irq_stack_bottom = .;  . += 0x800;  _irq_stack_top = .;
 		_abt_stack_bottom = .;  . += 0x200;  _abt_stack_top = .;
 		_und_stack_bottom = .;  . += 0x200;  _und_stack_top = .;
 		_sys_stack_bottom = .;  . += 0x1000; _sys_stack_top = .;

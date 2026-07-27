@@ -129,6 +129,6 @@ StatusCode uart_rx_nonblocking(uint8_t *out);
 StatusCode uart_rx_timed(uint8_t *out, uint32_t timeout_ms);
 void uart_print(const char *str);
 void uart_printf(const char *fmt, ...);
-
+void uart_fault_report(uint32_t kind, uint32_t pc, uint32_t addr, uint32_t status);
 
 #endif

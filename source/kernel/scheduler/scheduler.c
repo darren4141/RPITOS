@@ -187,12 +187,14 @@ void schedulerSwitchContext(void)
   }
 
   // If the current task used its quantum (not blocked), mark READY and advance
-  // the round-robin index so the next task at the same priority runs next tick
+  // the round-robin index so the next task at the same priority runs next tick.
   if ((p_task_control_block != NULL) && (p_task_control_block->currentState == TASK_STATE_RUNNING)) {
-    p_task_control_block->currentState = TASK_STATE_READY;
-    List *list = &ready_list[p_task_control_block->priority];
-    if (list->index != NULL) {
-      list->index = (list->index->next != NULL) ? list->index->next : list->head;
+    if (p_task_control_block->priority < NUM_TASK_PRIORITIES) {
+      p_task_control_block->currentState = TASK_STATE_READY;
+      List *list = &ready_list[p_task_control_block->priority];
+      if (list->index != NULL) {
+        list->index = (list->index->next != NULL) ? list->index->next : list->head;
+      }
     }
   }
 
@@ -437,8 +439,4 @@ void __attribute__((noinline)) timer_tick_handler(void)
   // Expire software timers: move any due timers to the active list and signal
   // the software-timer service task once per expiry.
   software_timer_tick(*s_tick_count);
-
-  if ((*s_tick_count) % 5000 == 0) {
-    uart_print("heartbeat\r\n");
-  }
 }

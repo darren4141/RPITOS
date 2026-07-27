@@ -8,4 +8,5 @@
 #include <stdint.h>
 
 StatusCode task_create(TaskFunction_t taskFunction, uint16_t stack_depth, TaskPriorityLevel priority, void *taskParams, TaskControlBlock **p_task_control_block);
+
 #endif

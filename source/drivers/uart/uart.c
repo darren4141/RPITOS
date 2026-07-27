@@ -416,3 +416,27 @@ void uart_printf(const char *fmt, ...)
   local[pos] = '\0';
   uart_print(local);
 }
+
+static void fault_puthex(uint32_t v)
+{
+  static const char hexd[] = "0123456789ABCDEF";
+  uart_tx_raw('0');
+  uart_tx_raw('x');
+  for (int i = 28; i >= 0; i -= 4) {
+    uart_tx_raw((uint8_t)hexd[(v >> i) & 0xFU]);
+  }
+}
+
+void uart_fault_report(uint32_t kind, uint32_t pc, uint32_t addr, uint32_t status)
+{
+  uart_tx_raw('\r');uart_tx_raw('\n');
+  uart_tx_raw('P');uart_tx_raw('C');uart_tx_raw('=');
+  fault_puthex(pc);
+  uart_tx_raw(' ');uart_tx_raw('A');uart_tx_raw('=');
+  fault_puthex(addr);
+  uart_tx_raw(' ');uart_tx_raw('S');uart_tx_raw('=');
+  fault_puthex(status);
+  uart_tx_raw(' ');uart_tx_raw('K');uart_tx_raw('=');
+  fault_puthex(kind);
+  uart_tx_raw('\r');uart_tx_raw('\n');
+}
