@@ -165,7 +165,7 @@ void kmain(void)
              "500ms / 1s / 2s; a one-shot fires once at 5s. At 8s the fast\r\n"
              "timer is stopped and the slow timer is reset.\r\n\r\n");
 
-  scheduler_init(&clk_freq, hz, &tick_count);
+  scheduler_init(0, &clk_freq, hz, &tick_count);
   uart_task_start();
 
   // Software-timer subsystem must be initialized/started before watchdog_task_start
@@ -179,7 +179,8 @@ void kmain(void)
   watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
   watchdog_task_start();
 
-  gic_init();
+  gic_distributor_init();
+  gic_percore_init();
   gentimer_init(&clk_freq, hz);
   // DFU recovery is wired up automatically now (scheduler_init() + uart_task_start()) —
   // no per-app call needed. See dfu_trigger.h.

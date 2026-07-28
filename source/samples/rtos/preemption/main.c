@@ -101,7 +101,7 @@ void kmain(void)
              "MID goes silent until LOW releases.  Timestamps in ms.\r\n"
              "To observe priority inversion: change mutex_set_inheritance to 0.\r\n\r\n");
 
-  scheduler_init(&clk_freq, hz, &tick_count);
+  scheduler_init(0, &clk_freq, hz, &tick_count);
   uart_task_start();
 
   task_create(low_task, 2048, TASK_PRIORITY_1, NULL, &tcb_low);
@@ -114,7 +114,8 @@ void kmain(void)
   watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
   watchdog_task_start();
 
-  gic_init();
+  gic_distributor_init();
+  gic_percore_init();
   gentimer_init(&clk_freq, hz);
   // DFU recovery is wired up automatically now (scheduler_init() + uart_task_start()) —
   // no per-app call needed. See dfu_trigger.h.
