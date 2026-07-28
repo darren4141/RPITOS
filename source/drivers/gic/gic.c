@@ -1,5 +1,7 @@
 #include "gic.h"
 
+#include "smp.h"
+
 #define GICD_BASE      0xFF841000
 #define GICC_BASE      0xFF842000
 #define ARM_LOCAL_BASE 0xFF800000
@@ -15,36 +17,44 @@
 
 #define CORE_TIMER_IRQCNTL(n) (*(volatile uint32_t *)(ARM_LOCAL_BASE + 0x40 + (n) * 4))
 
-void gic_init(void)
+void gic_distributor_init(void)
+{
+  volatile uint32_t *gicd = (volatile uint32_t *)GICD_BASE;
+
+  // Disable then re-enable — the only genuinely global (non-banked) register
+  // this driver touches. Everything PPI/CPU-interface/timer-routing related
+  // is per-core and lives in gic_percore_init() instead.
+  gicd[GICD_CTLR] = 0;
+  __asm__ volatile ("dsb sy" ::: "memory");
+  gicd[GICD_CTLR] = 1;
+  __asm__ volatile ("dsb sy" ::: "memory");
+}
+
+void gic_percore_init(void)
 {
   volatile uint32_t *gicd = (volatile uint32_t *)GICD_BASE;
   volatile uint32_t *gicc = (volatile uint32_t *)GICC_BASE;
 
-  // 1. Disable distributor before configuration
-  gicd[GICD_CTLR] = 0;
-  __asm__ volatile ("dsb sy" ::: "memory");
-
-  // 2. Enable PPI 30 (nCNTPNSIRQ — EL1 non-secure physical timer) in ISENABLER0
+  // 1. Enable PPI 30 (nCNTPNSIRQ — EL1 non-secure physical timer) in this
+  // core's banked ISENABLER0.
   gicd[GICD_ISENABLER(0)] |= (1U << 30);
 
-  // 3. Set priority for PPI 30
+  // 2. Set priority for PPI 30 in this core's banked IPRIORITYR.
   // register index = 30/4 = 7, byte = 30%4 = 2, shift = 16
   uint32_t pri_reg = 30 / 4;
   uint32_t pri_shift = (30 % 4) * 8;
   gicd[GICD_IPRIORITYR(pri_reg)] = (gicd[GICD_IPRIORITYR(pri_reg)] & ~(0xFFU << pri_shift)) | (0x80U << pri_shift);
 
-  // 4. Re-enable distributor
-  gicd[GICD_CTLR] = 1;
-
-  // 5. Set CPU interface priority mask — allow all priorities
+  // 3. Set this core's CPU interface priority mask — allow all priorities
   gicc[GICC_PMR] = 0xFF;
 
-  // 6. Enable CPU interface
+  // 4. Enable this core's CPU interface
   gicc[GICC_CTLR] = 1;
 
-  // 7. Route nCNTPNSIRQ to Core 0 IRQ via the ARM Local controller, not the
-  // GIC's own PPI 30 path — see docs.md for why.
-  CORE_TIMER_IRQCNTL(0) |= (1 << 1);   // nCNTPNSIRQ → Core0 IRQ
+  // 5. Route nCNTPNSIRQ to this core's IRQ via the ARM Local controller (one
+  // distinct MMIO address per core), not the GIC's own PPI 30 path — see
+  // docs.md for why.
+  CORE_TIMER_IRQCNTL(smp_core_id()) |= (1 << 1);   // nCNTPNSIRQ → this core's IRQ
 
   __asm__ volatile ("dsb sy" ::: "memory");
 }
@@ -78,13 +88,11 @@ void gic_enable_spi(uint32_t intid, uint8_t priority)
 
 void gic_disable(void)
 {
-  volatile uint32_t *gicd = (volatile uint32_t *)GICD_BASE;
   volatile uint32_t *gicc = (volatile uint32_t *)GICC_BASE;
 
-  gicc[GICC_CTLR] = 0;
-  gicd[GICD_CTLR] = 0;
+  gicc[GICC_CTLR] = 0;   // this core's CPU interface only — GICD_CTLR is left alone (shared by every other core)
 
-  CORE_TIMER_IRQCNTL(0) &= ~(1U << 1);   // undo nCNTPNSIRQ → Core0 IRQ routing
+  CORE_TIMER_IRQCNTL(smp_core_id()) &= ~(1U << 1);   // undo nCNTPNSIRQ → this core's IRQ routing
 
   __asm__ volatile ("dsb sy" ::: "memory");
 }
