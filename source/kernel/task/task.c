@@ -1,11 +1,15 @@
 #include "task.h"
+#include "smp.h"
 #include "uart.h"
 
 #include <stddef.h>
 
-static uint16_t task_counter = 0;
+// Each core gets its own TCB pool — task_create() always creates a task on
+// the calling core (there is no cross-core task-creation API), so these are
+// indexed by smp_core_id(), never contended across cores.
+static uint16_t task_counter[SMP_MAX_CORES] = { 0 };
 
-static TaskControlBlock tcb_pool[MAX_NUM_TASKS];
+static TaskControlBlock tcb_pool[SMP_MAX_CORES][MAX_NUM_TASKS];
 
 static void task_exit_trap(void);
 
@@ -46,7 +50,9 @@ static void task_exit_trap(void)
 
 StatusCode task_create(TaskFunction task_function, uint16_t stack_depth, TaskPriorityLevel priority, void *task_params, TaskControlBlock **p_task_control_block)
 {
-  if (task_counter == MAX_NUM_TASKS) {
+  uint32_t core_id = smp_core_id();
+
+  if (task_counter[core_id] == MAX_NUM_TASKS) {
     return E_RESOURCE_EXHAUSTED;
   }
 
@@ -54,7 +60,7 @@ StatusCode task_create(TaskFunction task_function, uint16_t stack_depth, TaskPri
     priority = NUM_TASK_PRIORITIES - 1;
   }
 
-  *p_task_control_block = &tcb_pool[task_counter];
+  *p_task_control_block = &tcb_pool[core_id][task_counter[core_id]];
 
   (*p_task_control_block)->stack_base = heap_malloc(sizeof(StackType_t) * stack_depth);
   if ((*p_task_control_block)->stack_base == NULL) {
@@ -66,8 +72,9 @@ StatusCode task_create(TaskFunction task_function, uint16_t stack_depth, TaskPri
     (*p_task_control_block)->stack_base[i] = TASK_WATERMARK;
   }
 
-  (*p_task_control_block)->task_id = task_counter;
-  task_counter++;
+  (*p_task_control_block)->task_id = task_counter[core_id];
+  (*p_task_control_block)->core_id = core_id;
+  task_counter[core_id]++;
 
   (*p_task_control_block)->priority = priority;
   (*p_task_control_block)->base_priority = priority;
@@ -92,7 +99,12 @@ StatusCode task_create(TaskFunction task_function, uint16_t stack_depth, TaskPri
   (*p_task_control_block)->event_list_item.next = NULL;
   (*p_task_control_block)->event_list_item.prev = NULL;
 
+  // scheduler_lock() here guards against a concurrent cross-core wake
+  // (semaphore_give()/mutex_unlock() from another core) touching this same
+  // core's ready list at the same instant — see scheduler_lock()'s doc.
+  scheduler_lock(core_id);
   scheduler_add_to_ready_list(p_task_control_block);
+  scheduler_unlock(core_id);
 
   return E_OK;
 }
