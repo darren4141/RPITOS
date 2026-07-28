@@ -170,8 +170,18 @@ _irq_handler:
     b    irq_eoi$
 
 cntx_switch$:
-    ldr r0, =p_task_control_block
-    ldr r1, [r0]
+    @ p_task_control_block is now one slot per core (TaskControlBlock
+    @ *p_task_control_block[SMP_MAX_CORES]) — each core only ever touches its
+    @ own slot here, so index by MPIDR & 3, not a bare symbol load. Keep the
+    @ core id in r5 (callee-saved per AAPCS) so it survives the two bl calls
+    @ below — r0-r3 are caller-saved/scratch and WILL be clobbered by them,
+    @ so &p_task_control_block[core_id] must be recomputed after, not reused.
+    mrc  p15, 0, r5, c0, c0, 5   @ MPIDR
+    and  r5, r5, #0x3            @ this core's id
+
+    ldr  r0, =p_task_control_block
+    add  r0, r0, r5, lsl #2      @ &p_task_control_block[core_id]
+    ldr  r1, [r0]
     str sp, [r1, #0]    @ Save task A's SP
 
 
@@ -181,8 +191,10 @@ cntx_switch$:
     bl scheduler_switch_context
 
     cps  #0x13                   @ back to SVC mode
-    ldr r0, =p_task_control_block
-    ldr r1, [r0]
+    ldr  r0, =p_task_control_block
+    add  r0, r0, r5, lsl #2      @ &p_task_control_block[core_id] — recomputed;
+                                 @ r0 is scratch and may have changed above
+    ldr  r1, [r0]
     ldr sp, [r1, #0]    @ Load task B's SP
 
 irq_eoi$:
@@ -200,8 +212,13 @@ _secondary_hang$:
 
 .globl start_first_task
 start_first_task:
-    ldr     r0, =p_task_control_block
-    ldr     r1, [r0]                @ R1 = first TCB
+    @ Called once per core, from that core's own scheduler_start(). Index
+    @ p_task_control_block by this core's id — see cntx_switch$ above.
+    mrc     p15, 0, r0, c0, c0, 5    @ MPIDR
+    and     r0, r0, #0x3             @ this core's id
+    ldr     r2, =p_task_control_block
+    add     r2, r2, r0, lsl #2       @ &p_task_control_block[core_id]
+    ldr     r1, [r2]                 @ R1 = first TCB
     ldr     sp, [r1, #0]            @ SP = current_sp (first field of TaskControlBlock)
 
     pop     {r0-r12, lr}        @ frame layout: [r0-r12][lr][pc][spsr]
