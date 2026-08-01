@@ -50,19 +50,9 @@ static void task_exit_trap(void)
 
 StatusCode task_create(TaskFunction task_function, uint16_t stack_depth, TaskPriorityLevel priority, void *task_params, TaskControlBlock **p_task_control_block)
 {
-<<<<<<< HEAD
-  uint32_t core_id = smp_core_id();
-
-  if (task_counter[core_id] == MAX_NUM_TASKS) {
-=======
-<<<<<<< Updated upstream
-  if (task_counter == MAX_NUM_TASKS) {
-=======
   uint32_t core_id = companion_core_id();
 
   if (task_counter[core_id] == MAX_NUM_TASKS) {
->>>>>>> Stashed changes
->>>>>>> 10d4a98 (multicore improvements)
     return E_RESOURCE_EXHAUSTED;
   }
 

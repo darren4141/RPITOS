@@ -129,13 +129,10 @@ void gic_disable(void)
 {
   volatile uint32_t *gicc = (volatile uint32_t *)GICC_BASE;
 
-  gicc[GICC_CTLR] = 0;                                               // this core's CPU interface only — GICD_CTLR is left alone (shared by every other core)
+  gicc[GICC_CTLR] = 0;                                   // this core's CPU interface only — GICD_CTLR is left alone (shared by every other core)
 
-    << << << < Updated upstream CORE_TIMER_IRQCNTL(0) &= ~(1U << 1); // undo nCNTPNSIRQ → Core0 IRQ routing
-  == == == =
-    CORE_TIMER_IRQCNTL(companion_core_id()) &= ~(1U << 1);           // undo nCNTPNSIRQ → this core's IRQ routing
-  CORE_MBOX_IRQCNTL(companion_core_id()) &= ~(1U << 0);              // undo mailbox 0 IRQ routing
-  >> >> >> > Stashed changes
+  CORE_TIMER_IRQCNTL(companion_core_id()) &= ~(1U << 1); // undo nCNTPNSIRQ → this core's IRQ routing
+  CORE_MBOX_IRQCNTL(companion_core_id()) &= ~(1U << 0);  // undo mailbox 0 IRQ routing
 
   __asm__ volatile ("dsb sy" ::: "memory");
 }
