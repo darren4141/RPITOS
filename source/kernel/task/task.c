@@ -1,15 +1,15 @@
 #include "task.h"
-#include "smp.h"
+#include "companion_core.h"
 #include "uart.h"
 
 #include <stddef.h>
 
 // Each core gets its own TCB pool — task_create() always creates a task on
 // the calling core (there is no cross-core task-creation API), so these are
-// indexed by smp_core_id(), never contended across cores.
-static uint16_t task_counter[SMP_MAX_CORES] = { 0 };
+// indexed by companion_core_id(), never contended across cores.
+static uint16_t task_counter[COMPANION_CORE_MAX_CORES] = { 0 };
 
-static TaskControlBlock tcb_pool[SMP_MAX_CORES][MAX_NUM_TASKS];
+static TaskControlBlock tcb_pool[COMPANION_CORE_MAX_CORES][MAX_NUM_TASKS];
 
 static void task_exit_trap(void);
 
@@ -50,9 +50,19 @@ static void task_exit_trap(void)
 
 StatusCode task_create(TaskFunction task_function, uint16_t stack_depth, TaskPriorityLevel priority, void *task_params, TaskControlBlock **p_task_control_block)
 {
+<<<<<<< HEAD
   uint32_t core_id = smp_core_id();
 
   if (task_counter[core_id] == MAX_NUM_TASKS) {
+=======
+<<<<<<< Updated upstream
+  if (task_counter == MAX_NUM_TASKS) {
+=======
+  uint32_t core_id = companion_core_id();
+
+  if (task_counter[core_id] == MAX_NUM_TASKS) {
+>>>>>>> Stashed changes
+>>>>>>> 10d4a98 (multicore improvements)
     return E_RESOURCE_EXHAUSTED;
   }
 

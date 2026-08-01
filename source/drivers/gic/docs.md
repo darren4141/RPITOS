@@ -11,7 +11,7 @@ despite living at one nominal MMIO address:
   `gic_percore_init()`.
 - `gic_percore_init()` — everything else: this core's `GICD_ISENABLER0`/
   `GICD_IPRIORITYR` bits for the PPI range, its `GICC_CTLR`/`GICC_PMR`, and
-  its `CORE_TIMER_IRQCNTL(smp_core_id())` timer routing. **Every** core that
+  its `CORE_TIMER_IRQCNTL(companion_core_id())` timer routing. **Every** core that
   wants to take IRQs — including core 0 — must call this itself; a core that
   skips it never receives an IRQ no matter what the other two did.
 

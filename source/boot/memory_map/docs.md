@@ -10,4 +10,4 @@ addresses are the contract between them.
 | `BOOTLOADER_START_ADDR` | 0x10000 | bootstrap loads the bootloader here |
 | `BOOT_FLAGS_START_ADDR` | 0x88000 | shared RAM between bootloader and app (see `boot_flags`) |
 | `APP_START_ADDR` | 0x88400 | bootloader loads the app here |
-| `CORE_MAILBOX_ADDR` | 0x88300 | secondary-core entry-point mailbox (see `smp`) |
+| `CORE_MAILBOX_ADDR` | 0x88300 | secondary-core entry-point mailbox (see `companion_core`) |

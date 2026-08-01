@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 
+#include "companion_core.h"
 #include "gentimer.h"
 #include "gic.h"
 #include "gpio.h"
@@ -23,6 +24,12 @@ void enter_bootloader(void)
 {
   // Mask interrupts before tearing down the very peripherals that raise them.
   __asm__ volatile ("cpsid if" ::: "memory");
+
+  // Re-park any companion cores released via companion_core_start() — a DFU
+  // soft reset is core-0-scoped, so without this a core still running its
+  // old entry function would miss the next boot's companion_core_start()
+  // call and need a physical power cycle. See companion_core_soft_reset_plan.md.
+  companion_core_reset_active();
 
   gentimer_disable();
   gic_disable();

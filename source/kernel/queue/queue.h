@@ -2,6 +2,7 @@
 #define QUEUE_H
 
 #include "semaphore.h"
+#include "spinlock.h"
 #include "status.h"
 
 typedef struct Queue Queue;
@@ -15,6 +16,8 @@ struct Queue {
 
   Semaphore space_available;
   Semaphore data_available;
+
+  Spinlock lock;
 };
 
 /**

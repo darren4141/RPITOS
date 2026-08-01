@@ -12,4 +12,4 @@ for the interrupt to actually reach the CPU.
 
 `enter_critical()`/`exit_critical()` here are the codebase's only critical
 section primitive: mask IRQs, save/restore CPSR. There is no additional
-locking for SMP — see `smp/docs.md`.
+locking for SMP — see `companion_core/docs.md`.

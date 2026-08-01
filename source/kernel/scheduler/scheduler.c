@@ -2,9 +2,9 @@
 
 #include <stddef.h>
 
+#include "companion_core.h"
 #include "dfu_trigger.h"
 #include "interrupts.h"
-#include "smp.h"
 #include "spinlock.h"
 #include "uart.h"
 
@@ -12,7 +12,7 @@
 
 // Per-core scheduler state, including its own lock. Indexed by
 // TaskControlBlock.core_id (not the calling core) wherever a TCB is
-// involved, and by smp_core_id() for "operate on the calling core's own
+// involved, and by companion_core_id() for "operate on the calling core's own
 // scheduler" entry points (scheduler_switch_context, timer_tick_handler).
 // A task's core_id never changes (no task migration between cores), so every
 // scheduler operation only ever needs exactly one core's lock — routine
@@ -28,9 +28,9 @@ typedef struct {
   StackType_t idle_stack[IDLE_STACK_DEPTH];
 } SchedulerCore;
 
-static SchedulerCore g_cores[SMP_MAX_CORES];
+static SchedulerCore g_cores[COMPANION_CORE_MAX_CORES];
 
-TaskControlBlock *p_task_control_block[SMP_MAX_CORES];    // global — visible to assembly
+TaskControlBlock *p_task_control_block[COMPANION_CORE_MAX_CORES];    // global — visible to assembly
 
 // Software-timer tick hook. software_timer.c provides the strong definition;
 // samples that do not link the software-timer module fall back to this weak
@@ -71,7 +71,7 @@ void scheduler_unlock(uint32_t core_id)
 // Initialize the calling core's own scheduler, link clk_freq/tick_count, and initialize its ready lists
 StatusCode scheduler_init(uint32_t core_id, volatile uint32_t *p_clk_freq, uint32_t new_hz, volatile uint64_t *p_tick_count)
 {
-  if ((p_clk_freq == NULL) || (p_tick_count == NULL) || (core_id >= SMP_MAX_CORES)) {
+  if ((p_clk_freq == NULL) || (p_tick_count == NULL) || (core_id >= COMPANION_CORE_MAX_CORES)) {
     return E_INVALID_ARGS;
   }
 
@@ -145,14 +145,14 @@ StatusCode scheduler_init(uint32_t core_id, volatile uint32_t *p_clk_freq, uint3
 
 TaskControlBlock *scheduler_get_current_task()
 {
-  return p_task_control_block[smp_core_id()];
+  return p_task_control_block[companion_core_id()];
 }
 
 // Adds a task to the back of the ready list of its respective priority, on
 // its own core. Caller must hold scheduler_lock((*tcb)->core_id).
 StatusCode scheduler_add_to_ready_list(TaskControlBlock **tcb)
 {
-  if ((tcb == NULL) || (*tcb == NULL) || ((*tcb)->priority >= NUM_TASK_PRIORITIES) || ((*tcb)->core_id >= SMP_MAX_CORES)) {
+  if ((tcb == NULL) || (*tcb == NULL) || ((*tcb)->priority >= NUM_TASK_PRIORITIES) || ((*tcb)->core_id >= COMPANION_CORE_MAX_CORES)) {
     return E_INVALID_ARGS;
   }
 
@@ -184,7 +184,7 @@ StatusCode scheduler_add_to_ready_list(TaskControlBlock **tcb)
 // core. Caller must hold scheduler_lock((*tcb)->core_id).
 StatusCode scheduler_remove_from_ready_list(TaskControlBlock **tcb)
 {
-  if ((tcb == NULL) || (*tcb == NULL) || ((*tcb)->priority >= NUM_TASK_PRIORITIES) || ((*tcb)->core_id >= SMP_MAX_CORES)) {
+  if ((tcb == NULL) || (*tcb == NULL) || ((*tcb)->priority >= NUM_TASK_PRIORITIES) || ((*tcb)->core_id >= COMPANION_CORE_MAX_CORES)) {
     return E_INVALID_ARGS;
   }
 
@@ -227,7 +227,7 @@ StatusCode scheduler_remove_from_ready_list(TaskControlBlock **tcb)
 // Scheduler performs a context switch on the calling core, round-robin, highest priority takes precedence
 void scheduler_switch_context(void)
 {
-  uint32_t core_id = smp_core_id();
+  uint32_t core_id = companion_core_id();
   SchedulerCore *core = &g_cores[core_id];
   TaskControlBlock *current = p_task_control_block[core_id];
 
@@ -272,7 +272,7 @@ void scheduler_switch_context(void)
 // Start the calling core's scheduler by performing a context switch and starting its first task
 StatusCode scheduler_start(void)
 {
-  uint32_t core_id = smp_core_id();
+  uint32_t core_id = companion_core_id();
 
   scheduler_switch_context();
   if (p_task_control_block[core_id] == NULL) {
@@ -286,13 +286,13 @@ StatusCode scheduler_start(void)
 
 uint64_t scheduler_get_tick_count(void)
 {
-  return *g_cores[smp_core_id()].s_tick_count;
+  return *g_cores[companion_core_id()].s_tick_count;
 }
 
 // Caller must hold scheduler_lock(tcb->core_id).
 StatusCode scheduler_add_to_blocked_list(TaskControlBlock *tcb, uint64_t wakeup_time)
 {
-  if ((tcb == NULL) || (tcb->core_id >= SMP_MAX_CORES)) {
+  if ((tcb == NULL) || (tcb->core_id >= COMPANION_CORE_MAX_CORES)) {
     return E_INVALID_ARGS;
   }
 
@@ -338,7 +338,7 @@ StatusCode scheduler_add_to_blocked_list(TaskControlBlock *tcb, uint64_t wakeup_
 // Caller must hold scheduler_lock(tcb->core_id).
 StatusCode scheduler_remove_from_blocked_list(TaskControlBlock *tcb)
 {
-  if ((tcb == NULL) || (tcb->core_id >= SMP_MAX_CORES)) {
+  if ((tcb == NULL) || (tcb->core_id >= COMPANION_CORE_MAX_CORES)) {
     return E_INVALID_ARGS;
   }
 
@@ -416,7 +416,7 @@ void scheduler_change_task_priority(TaskControlBlock *tcb, TaskPriorityLevel new
 
 static void block_until(uint64_t wakeup_time)
 {
-  uint32_t core_id = smp_core_id();
+  uint32_t core_id = companion_core_id();
   volatile TaskControlBlock *my_tcb = p_task_control_block[core_id];
 
   uint32_t cpsr = enter_critical();
@@ -451,7 +451,7 @@ void task_delay_until_ms(uint64_t *last_wake_time, uint64_t period)
 // its tick_count, and checks to unblock its own tasks.
 void __attribute__((noinline)) timer_tick_handler(void)
 {
-  uint32_t core_id = smp_core_id();
+  uint32_t core_id = companion_core_id();
   SchedulerCore *core = &g_cores[core_id];
 
   // Rearm relative to the current physical counter (CNTPCT) in case any systicks got skipped

@@ -137,7 +137,7 @@ _fiq_handler:       b _fiq_handler
 @ (separately-linked image, no shared symbol table), so this is a deliberate
 @ duplicate, not a shortcut. Brings each secondary to SVC mode, caches off,
 @ its own stack, then parks it watching the same software mailbox bootstrap
-@ uses, so smp_start_core() works no matter which image's kick actually ran.
+@ uses, so companion_core_start() works no matter which image's kick actually ran.
 _secondary_boot$:
 
     @ ---- HYP -> SVC (secondaries also boot in HYP) ----

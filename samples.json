@@ -8,6 +8,7 @@
     "rtos/preemption",
     "rtos/mutex_inheritance",
     "rtos/software_timer",
-    "rtos/multicore_blink"
+    "rtos/multicore_blink",
+    "rtos/multicore_full_demo"
   ]
 }

@@ -20,3 +20,9 @@ to the bootloader at `BOOTLOADER_START_ADDR` — no hardware reset, so RAM
 `system_hard_reset()` and doesn't depend on the PM watchdog trick, but can't
 recover if the bootloader's own code/data in RAM was corrupted by the app.
 Never returns.
+
+Also calls `companion_core_reset_active()` first, since this is core-0-only —
+without it, any companion core released via `companion_core_start()` would
+keep running through the reboot instead of being re-parked, requiring a
+physical power cycle to recover. See `companion_core/docs.md`'s "Re-parking
+for a DFU/software reboot".

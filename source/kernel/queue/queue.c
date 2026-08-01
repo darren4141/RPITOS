@@ -19,6 +19,7 @@ StatusCode queue_init(Queue *q, uint32_t capacity, uint32_t item_size)
 
   semaphore_init(&q->data_available, capacity, 0);
   semaphore_init(&q->space_available, capacity, capacity);
+  spinlock_init(&q->lock);
 
   return E_OK;
 }
@@ -30,6 +31,7 @@ StatusCode queue_send(Queue *q, const void *src, int64_t timeout_ms)
   }
 
   uint32_t cpsr = enter_critical();
+  spinlock_acquire(&q->lock);
 
   // perform the send
 
@@ -39,6 +41,7 @@ StatusCode queue_send(Queue *q, const void *src, int64_t timeout_ms)
 
   q->head = (q->head + 1) % q->capacity;
 
+  spinlock_release(&q->lock);
   exit_critical(cpsr);
 
   semaphore_give(&q->data_available);
@@ -53,6 +56,7 @@ StatusCode queue_recv(Queue *q, void *dst, int64_t timeout_ms)
   }
 
   uint32_t cpsr = enter_critical();
+  spinlock_acquire(&q->lock);
 
   // perform the receive
 
@@ -62,6 +66,7 @@ StatusCode queue_recv(Queue *q, void *dst, int64_t timeout_ms)
 
   q->tail = (q->tail + 1) % q->capacity;
 
+  spinlock_release(&q->lock);
   exit_critical(cpsr);
 
   semaphore_give(&q->space_available);

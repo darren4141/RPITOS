@@ -3,13 +3,20 @@
 BMP (per-core scheduler) demo for the Raspberry Pi CM4 — each core runs its
 own independent RTOS scheduler instance, not one shared ready list.
 
-Core 0 runs the RTOS: it starts the UART task and sends a periodic UART
-message from a scheduled task. Core 0 also releases secondary core 1 (via
-`smp_start_core`), which now boots **its own scheduler** (`core1_kmain` →
-`gic_percore_init()` → `gentimer_init()` → `scheduler_init(1, ...)` →
-`task_create()` → `scheduler_start()`) and runs a real scheduled task
-(`core1_blink_task`) that blinks GPIO 16 via `task_delay_ms()`, not a busy
-loop. Cores 2/3 remain bare, kernel-free loops for now.
+Core 0 runs the RTOS: it starts the UART task and runs two scheduled tasks
+that each send periodic UART messages at different rates. Core 0 also
+releases secondary core 1 (via `companion_core_start`), which now boots **its
+own scheduler** (`core1_kmain` → `gic_percore_init()` → `gentimer_init()` →
+`scheduler_init(1, ...)` → `task_create()` → `scheduler_start()`) and runs
+three real scheduled tasks (`led16_task`/`led20_task`/`led21_task`), each
+blinking its own GPIO via `task_delay_ms()` *and* sending its own periodic
+UART message — not a busy loop. Cores 2/3 remain bare, kernel-free loops for
+now.
+
+With five independent UART producers spread across two cores (two on core 0,
+three on core 1), this sample doubles as the multicore stress test for
+`uart.c`'s `uart_buf_lock` — see `uart/docs.md`'s Multicore section and
+`spinlock/docs.md`'s "Where it's used".
 
 This is a step beyond the original AMP milestone (core 1 as a bare loop): it
 proves a secondary core can take real IRQ-driven interrupts (its own timer
@@ -26,8 +33,8 @@ stay bare loops. Cross-core synchronization primitives (`semaphore_give()`,
 
 | Core | Behaviour |
 |---|---|
-| 0 (RTOS) | `core0_uart_task` — prints a message + tick count every 1 s |
-| 1 (RTOS) | `core1_blink_task` — its own scheduler; toggles GPIO 16 via `task_delay_ms()` |
+| 0 (RTOS) | `core0_uart_task` — prints every 1 s; `core0_uart_task2` — prints every 700 ms |
+| 1 (RTOS) | its own scheduler; `led16_task`/`led20_task`/`led21_task` — toggle GPIO 16/20/21 (500/250/125 ms) and each print on every toggle |
 | 2/3 (bare) | busy-wait loops, no scheduler |
 
 ## Build
@@ -41,5 +48,5 @@ Output: `build/rtos/multicore_blink/multicore_blink.elf / .img / .hex`
 ## Components used
 
 - **Drivers**: `gpio`, `uart`, `gentimer`, `gic`, `jtag`, `reset`, `interrupts`, `dma`, `watchdog`, `emmc`, `crc`
-- **Kernel**: `scheduler`, `task`, `semaphore`, `heap`, `smp`, `spinlock`, `software_timer`
+- **Kernel**: `scheduler`, `task`, `semaphore`, `heap`, `companion_core`, `spinlock`, `software_timer`
 - **Boot library**: `dfu_trigger`, `boot_flags`
