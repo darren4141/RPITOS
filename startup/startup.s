@@ -146,6 +146,24 @@ _irq_handler:
                                  @ task's stack) and traps as Undefined.
 
 
+    @ Check this core's ARM Local mailbox 0 BEFORE the GIC IAR read —
+    @ companion_core_reset_active()'s IPI (gic_send_mailbox_ipi()) is a
+    @ separate, non-GIC signal (see gic.h/companion_core_soft_reset_plan.md:
+    @ GICD_IGROUPR is confirmed write-ignored from this Non-secure-only OS,
+    @ so a GIC SGI can never be delivered here — this bypasses the GIC
+    @ entirely, same as CORE_TIMER_IRQCNTL already does for the timer). It
+    @ would never show up via GICC_IAR at all, so it has to be checked
+    @ independently or a pending IPI would be silently missed as spurious.
+    mrc  p15, 0, r5, c0, c0, 5   @ MPIDR
+    and  r5, r5, #0x3            @ this core's id — r5 kept (callee-saved) for
+                                 @ mailbox_park_request$ below; cntx_switch$
+                                 @ recomputes its own copy independently rather
+                                 @ than relying on this one surviving that far
+    ldr  r0, =0xFF800060          @ ARM_LOCAL_BASE + Core0 IRQ Source
+    ldr  r1, [r0, r5, lsl #2]     @ this core's IRQ Source register
+    tst  r1, #0x10                 @ LOCAL_IRQ_MAILBOX0 (bit 4)
+    bne  mailbox_park_request$
+
     ldr r0, =0xFF842000     @ GICC base addr
     ldr r1, [r0, #0x0C]     @ GICC_IAR ACK, get id
     mov  r4, r1                  @ save IAR in callee-saved register
@@ -171,7 +189,7 @@ _irq_handler:
 
 cntx_switch$:
     @ p_task_control_block is now one slot per core (TaskControlBlock
-    @ *p_task_control_block[SMP_MAX_CORES]) — each core only ever touches its
+    @ *p_task_control_block[COMPANION_CORE_MAX_CORES]) — each core only ever touches its
     @ own slot here, so index by MPIDR & 3, not a bare symbol load. Keep the
     @ core id in r5 (callee-saved per AAPCS) so it survives the two bl calls
     @ below — r0-r3 are caller-saved/scratch and WILL be clobbered by them,
@@ -206,9 +224,144 @@ irq_done$:
     pop  {r0-r12, lr}            @ restore r0–r12 and the task's own lr_svc
     rfeia sp!
 
+mailbox_park_request$:
+    @ DEBUG: raw marker, before anything else — confirms this core actually
+    @ received a mailbox 0 IPI this cycle. Bypasses uart.c's ring
+    @ buffer/lock entirely (direct PL011 register poke). r5 (core id) is only
+    @ read here, never written, so it survives untouched for the real work
+    @ below.
+    ldr  r0, =0xFE201000          @ UART0 base
+_dbg_mbox_wait1$:
+    ldr  r1, [r0, #0x18]
+    tst  r1, #0x20
+    bne  _dbg_mbox_wait1$
+    mov  r1, #'['
+    str  r1, [r0, #0x00]
+_dbg_mbox_wait2$:
+    ldr  r1, [r0, #0x18]
+    tst  r1, #0x20
+    bne  _dbg_mbox_wait2$
+    mov  r1, #'M'
+    str  r1, [r0, #0x00]
+_dbg_mbox_wait3$:
+    ldr  r1, [r0, #0x18]
+    tst  r1, #0x20
+    bne  _dbg_mbox_wait3$
+    add  r1, r5, #'0'
+    str  r1, [r0, #0x00]
+_dbg_mbox_wait4$:
+    ldr  r1, [r0, #0x18]
+    tst  r1, #0x20
+    bne  _dbg_mbox_wait4$
+    mov  r1, #']'
+    str  r1, [r0, #0x00]
+
+    @ Drain/ack this core's Mailbox 0 — QA7's RDCLR register clears as a side
+    @ effect of being read, there's no separate write-to-clear. No GIC
+    @ IAR/EOIR involved for this path at all (it never went through the GIC),
+    @ same reasoning as the CNTPNSIRQ ARM-Local routing already used for the
+    @ timer — see gic/docs.md.
+    ldr  r0, =0xFF8000C0           @ ARM_LOCAL_BASE + Core0 Mailbox0 RDCLR
+    ldr  r2, [r0, r5, lsl #4]      @ read Core<id> Mailbox0 RDCLR, clears it
+
+    @ No SP fixup needed here — _companion_core_park$ switches to a dedicated
+    @ stack immediately, so whatever SP currently holds (still the abandoned
+    @ task's, 64 bytes deeper than its real value thanks to _irq_handler's
+    @ own prologue) is about to be discarded entirely, not reused.
+    b    _companion_core_park$
+
 _secondary_hang$:
     wfe
     b _secondary_hang$
+
+@ Reached only via an ARM Local mailbox 0 IPI (mailbox_park_request$ above,
+@ triggered by companion_core_reset_active()) — a DFU/software reboot on
+@ another core wants this one to stop, so it can be released again after the
+@ reboot without a physical power cycle. Abandons whatever task/scheduler
+@ state this core had (the next boot's zero_bss$ wipes it anyway — see
+@ companion_core_soft_reset_plan.md's "Race window") and re-parks exactly
+@ like the bootstrap's _sec_park$, watching the same cross-image mailbox.
+@
+@ First switches SP to a dedicated per-core stack (g_companion_core_park_stack
+@ in companion_core.c) instead of continuing to use the abandoned task's own
+@ stack. Reusing that one turned out to be unsafe — its remaining headroom
+@ depends entirely on how deep the interrupted task happened to be when the
+@ IPI arrived, not something under our control, and the fresh entry
+@ function's own bring-up chain (gic_percore_init/gentimer_init/
+@ scheduler_init/task_create) needs real depth of its own. Overflowing into
+@ the abandoned stack's watermark-filled tail is exactly what produced
+@ repeated TASK_WATERMARK-as-return-address crashes during this
+@ investigation. There's no cross-image symbol for the bootstrap-provided
+@ per-core SVC stack to switch to instead (it lives inside bootstrap's own
+@ size-dependent memory layout, unlike the fixed CORE_MAILBOX_ADDR/
+@ APP_START_ADDR region), so this is an app-image-owned stack instead.
+_companion_core_park$:
+    mrc  p15, 0, r0, c0, c0, 5   @ MPIDR
+    and  r0, r0, #0x3            @ this core's id
+
+    ldr  r3, =g_companion_core_park_stack
+    add  r4, r0, #1               @ (core id + 1)
+    lsl  r4, r4, #13               @ * 8192 bytes (2048 words per core —
+                                   @ KEEP IN SYNC with COMPANION_CORE_PARK_STACK_WORDS
+                                   @ in companion_core.c)
+    add  sp, r3, r4                @ sp = top of this core's dedicated park stack
+    ldr  r1, =0x88300            @ CORE_MAILBOX_ADDR — KEEP IN SYNC with memory_map.h
+    mov  r2, #0
+    str  r2, [r1, r0, lsl #2]    @ zero our own mailbox slot — otherwise the
+                                 @ wait loop below would immediately re-blx the
+                                 @ stale old entry point instead of waiting
+    dsb  sy
+
+_companion_core_park_wait$:
+    wfe
+    ldr  r2, [r1, r0, lsl #2]
+    cmp  r2, #0
+    beq  _companion_core_park_wait$
+
+    @ DEBUG: raw marker — confirms we saw a fresh non-zero mailbox value and
+    @ are about to blx into it. r0 (core id), r1 (CORE_MAILBOX_ADDR), r2 (the
+    @ entry address) must survive; uses r6-r7 as scratch (push/pop would also
+    @ be safe now that we're on the dedicated park stack, not the abandoned
+    @ task's own one, but there's no need to change a working approach).
+    ldr  r6, =0xFE201000
+_dbg_wpark_wait1$:
+    ldr  r7, [r6, #0x18]
+    tst  r7, #0x20
+    bne  _dbg_wpark_wait1$
+    mov  r7, #'['
+    str  r7, [r6, #0x00]
+_dbg_wpark_wait2$:
+    ldr  r7, [r6, #0x18]
+    tst  r7, #0x20
+    bne  _dbg_wpark_wait2$
+    mov  r7, #'W'
+    str  r7, [r6, #0x00]
+_dbg_wpark_wait3$:
+    ldr  r7, [r6, #0x18]
+    tst  r7, #0x20
+    bne  _dbg_wpark_wait3$
+    add  r7, r0, #'0'
+    str  r7, [r6, #0x00]
+_dbg_wpark_wait4$:
+    ldr  r7, [r6, #0x18]
+    tst  r7, #0x20
+    bne  _dbg_wpark_wait4$
+    mov  r7, #']'
+    str  r7, [r6, #0x00]
+
+    blx  r2                      @ run whatever companion_core_start() published
+
+    @ If it ever returns (it shouldn't — scheduler_start() is documented
+    @ "never returns", but does have a real `return E_EMPTY` path if the
+    @ ready list is somehow empty), go back to _companion_core_park$, NOT
+    @ straight to _companion_core_park_wait$ — the mailbox slot still holds
+    @ this same now-stale entry address (nothing re-zeroed it after the
+    @ blx above), so branching to the wait loop directly would immediately
+    @ re-blx the exact same stale pointer in a tight loop instead of
+    @ waiting for a genuinely new release. This is what produced the
+    @ repeated "[M1]" markers and eventual heap exhaustion the one time
+    @ this path actually got exercised.
+    b    _companion_core_park$
 
 .globl start_first_task
 start_first_task:

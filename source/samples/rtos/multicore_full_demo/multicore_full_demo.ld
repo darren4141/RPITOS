@@ -1,5 +1,5 @@
 SECTIONS {
-	.init 0x8000 : {
+	.init 0x88400 : {
 		*(.init)
 	}
 
@@ -31,15 +31,12 @@ SECTIONS {
 	.stacks (NOLOAD) : {
 		. = ALIGN(8);
 		_fiq_stack_bottom = .;  . += 0x200;  _fiq_stack_top = .;
-		_irq_stack_bottom = .;  . += 0x400;  _irq_stack_top = .;
+		_irq_stack_bottom = .;  . += 0x800;  _irq_stack_top = .;
 		_abt_stack_bottom = .;  . += 0x200;  _abt_stack_top = .;
 		_und_stack_bottom = .;  . += 0x200;  _und_stack_top = .;
 		_sys_stack_bottom = .;  . += 0x1000; _sys_stack_top = .;
 		_svc_stack_bottom = .;  . += 0x1000; _svc_stack_top = .;
-		_sec_stack_bottom = .;  . += 3 * 0x800; _sec_stack_top = .;  /* SVC+ABT per secondary */
 	}
-
-	ASSERT(. <= 0x10000, "Wiper exceeds 32 KB — overlaps bootloader load address")
 
 	.shared_flags 0x88000 (NOLOAD) : {
 		_shared_flags_start = .;

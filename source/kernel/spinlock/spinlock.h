@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include "smp.h"
+#include "companion_core.h"
 
 /**
  * @brief Lamport's Bakery lock for mutual exclusion across cores.
@@ -24,8 +24,8 @@ typedef struct {
   // the MMU off) requires word-aligned, word-sized accesses; see
   // boot_chain.md's StartPacket comment for the same rule elsewhere in this
   // codebase.
-  volatile uint32_t choosing[SMP_MAX_CORES];
-  volatile uint32_t ticket[SMP_MAX_CORES];
+  volatile uint32_t choosing[COMPANION_CORE_MAX_CORES];
+  volatile uint32_t ticket[COMPANION_CORE_MAX_CORES];
 } Spinlock;
 
 /**
@@ -35,7 +35,7 @@ void spinlock_init(Spinlock *lock);
 
 /**
  * @brief Acquire the lock, spinning until it's this core's turn.
- * @note Reads smp_core_id() to identify the caller — do not call this
+ * @note Reads companion_core_id() to identify the caller — do not call this
  * recursively on the same lock from the same core, it is not reentrant.
  */
 void spinlock_acquire(Spinlock *lock);

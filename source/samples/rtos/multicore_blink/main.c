@@ -1,12 +1,12 @@
 // See README.md for what this sample demonstrates.
 
+#include "companion_core.h"
 #include "dfu_trigger.h"
 #include "gentimer.h"
 #include "gic.h"
 #include "gpio.h"
 #include "jtag.h"
 #include "scheduler.h"
-#include "smp.h"
 #include "software_timer.h"
 #include "task.h"
 #include "uart.h"
@@ -23,16 +23,25 @@ static volatile uint64_t tick_count = 0;
 static const uint32_t hz = 1000;   // 1 kHz tick
 
 static TaskControlBlock *tcb_uart = NULL;
+static TaskControlBlock *tcb_uart2 = NULL;
 
 // ── Core 1 — its own scheduler, own tick source, three independent blink tasks
 static volatile uint32_t core1_clk_freq;
 static volatile uint64_t core1_tick_count = 0;
 
+// Each of the three core 1 tasks also calls uart_printf() on its own toggle —
+// three independent producers on one core, plus core 0's two below, all
+// landing in the single shared ring buffer. Exercises uart.c's uart_buf_lock
+// (see uart/docs.md's Multicore section) both same-core (these three against
+// each other) and cross-core (against core 0's producers).
 static void led16_task(void *params)
 {
   (void)params;
+  uint32_t count = 0;
   while (1) {
     gpio_on(LED_PIN_16);
+    uart_printf("core 1 task16: message %u @ %u ms\r\n", count++,
+                (uint32_t)scheduler_get_tick_count());
     task_delay_ms(500U);
     gpio_off(LED_PIN_16);
     task_delay_ms(500U);
@@ -42,8 +51,11 @@ static void led16_task(void *params)
 static void led20_task(void *params)
 {
   (void)params;
+  uint32_t count = 0;
   while (1) {
     gpio_on(LED_PIN_20);
+    uart_printf("core 1 task20: message %u @ %u ms\r\n", count++,
+                (uint32_t)scheduler_get_tick_count());
     task_delay_ms(250U);
     gpio_off(LED_PIN_20);
     task_delay_ms(250U);
@@ -53,8 +65,11 @@ static void led20_task(void *params)
 static void led21_task(void *params)
 {
   (void)params;
+  uint32_t count = 0;
   while (1) {
     gpio_on(LED_PIN_21);
+    uart_printf("core 1 task21: message %u @ %u ms\r\n", count++,
+                (uint32_t)scheduler_get_tick_count());
     task_delay_ms(125U);
     gpio_off(LED_PIN_21);
     task_delay_ms(125U);
@@ -63,33 +78,58 @@ static void led21_task(void *params)
 
 static void core1_kmain(void)
 {
+  uart_tx_raw('[');uart_tx_raw('R');uart_tx_raw('1');uart_tx_raw(']');   // DEBUG: core1_kmain entered
+
   gpio_set_function(LED_PIN_16, GPIO_FUNC_OUTPUT);
   gpio_set_function(LED_PIN_20, GPIO_FUNC_OUTPUT);
   gpio_set_function(LED_PIN_21, GPIO_FUNC_OUTPUT);
+  uart_tx_raw('[');uart_tx_raw('G');uart_tx_raw('0');uart_tx_raw(']'); // DEBUG: gpio done
 
   gic_percore_init();
+  uart_tx_raw('[');uart_tx_raw('G');uart_tx_raw('1');uart_tx_raw(']'); // DEBUG: gic_percore_init done
+
   gentimer_init(&core1_clk_freq, hz);
+  uart_tx_raw('[');uart_tx_raw('G');uart_tx_raw('2');uart_tx_raw(']'); // DEBUG: gentimer_init done
+
   scheduler_init(1U, &core1_clk_freq, hz, &core1_tick_count);
+  uart_tx_raw('[');uart_tx_raw('G');uart_tx_raw('3');uart_tx_raw(']'); // DEBUG: scheduler_init done
 
   TaskControlBlock *tcb;
   task_create(led16_task, 2048, TASK_PRIORITY_1, NULL, &tcb);
+  uart_tx_raw('[');uart_tx_raw('T');uart_tx_raw('1');uart_tx_raw(']'); // DEBUG: task16 created
   task_create(led20_task, 2048, TASK_PRIORITY_1, NULL, &tcb);
+  uart_tx_raw('[');uart_tx_raw('T');uart_tx_raw('2');uart_tx_raw(']'); // DEBUG: task20 created
   task_create(led21_task, 2048, TASK_PRIORITY_1, NULL, &tcb);
+  uart_tx_raw('[');uart_tx_raw('T');uart_tx_raw('3');uart_tx_raw(']'); // DEBUG: task21 created
+
+  uart_tx_raw('[');uart_tx_raw('R');uart_tx_raw('2');uart_tx_raw(']'); // DEBUG: tasks created, about to start scheduler
 
   __asm__ volatile ("cpsie i" ::: "memory");
-  scheduler_start();     // never returns
+  scheduler_start();                                                   // never returns
 }
 
-// Core 0 UART task (RTOS)
-// Sends a periodic message over the UART task (DMA TX). uart_printf is task-safe.
+// Core 0 UART tasks (RTOS) — two independent tasks at different periods, both
+// sending over the UART task (DMA TX). uart_printf is task-safe, same-core and
+// cross-core (see uart/docs.md's Multicore section).
 static void core0_uart_task(void *params)
 {
   (void)params;
   uint32_t count = 0;
   while (1) {
-    uart_printf("core 0: message %u @ %u ms\r\n", count++,
+    uart_printf("core 0 taskA: message %u @ %u ms\r\n", count++,
                 (uint32_t)scheduler_get_tick_count());
     task_delay_ms(1000U);
+  }
+}
+
+static void core0_uart_task2(void *params)
+{
+  (void)params;
+  uint32_t count = 0;
+  while (1) {
+    uart_printf("core 0 taskB: message %u @ %u ms\r\n", count++,
+                (uint32_t)scheduler_get_tick_count());
+    task_delay_ms(700U);
   }
 }
 
@@ -99,8 +139,9 @@ void kmain(void)
 
   uart_init(UART_BAUDRATE_115200);
   uart_print("\r\n=== multicore_blink (BMP) ===\r\n"
-             "core 0: RTOS + periodic UART messages\r\n"
-             "core 1: its own RTOS scheduler, 3 tasks blinking GPIO 16/20/21\r\n\r\n");
+             "core 0: RTOS, 2 tasks printing periodic UART messages\r\n"
+             "core 1: its own RTOS scheduler, 3 tasks blinking GPIO 16/20/21"
+             " and each printing over UART\r\n\r\n");
 
   watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 1);
 
@@ -111,6 +152,7 @@ void kmain(void)
   software_timer_start();
 
   task_create(core0_uart_task, 2048, TASK_PRIORITY_1, NULL, &tcb_uart);
+  task_create(core0_uart_task2, 2048, TASK_PRIORITY_1, NULL, &tcb_uart2);
 
   watchdog_task_start();
 
@@ -129,11 +171,11 @@ void kmain(void)
 
   // Release core 1 into its own scheduler. Safe to call before core 0's
   // scheduler starts — it just publishes the entry and wakes the parked core.
-  if (smp_start_core(1U, core1_kmain) == E_OK) {
+  if (companion_core_start(1U, core1_kmain) == E_OK) {
     uart_print("core 0: released core 1\r\n");
   }
   else {
-    uart_print("core 0: smp_start_core failed\r\n");
+    uart_print("core 0: companion_core_start failed\r\n");
   }
 
   __asm__ volatile ("cpsie i" ::: "memory");

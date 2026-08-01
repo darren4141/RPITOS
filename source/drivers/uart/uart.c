@@ -10,6 +10,7 @@
 #include "gic.h"
 #include "interrupts.h"
 #include "semaphore.h"
+#include "spinlock.h"
 #include "task.h"
 #include "task_types.h"
 #endif
@@ -122,6 +123,13 @@ static Semaphore uart_dma_done;                // DMA IRQ → task: transfer com
 static volatile uint32_t uart_buf[UART_BUFFER_SIZE];
 static volatile uint16_t p_uart_buf_left = 0;   // index of last byte consumed
 static volatile uint16_t p_uart_buf_right = 0;  // index of last byte produced
+
+// Guards the reserve-a-slot-and-write step in uart_tx(): enter_critical() alone
+// only stops same-core preemption, so a second core calling uart_send_byte()/
+// uart_print() concurrently would race p_uart_buf_right/uart_buf[] without
+// this. .bss-zeroed initial state is already the unlocked state, so no
+// explicit init call is needed — see heap_lock in heap.c for the same pattern.
+static Spinlock uart_buf_lock;
 
 static TaskControlBlock *uart_tcb = NULL;
 static bool uart_task_started = false;
@@ -279,7 +287,9 @@ void uart_send_byte(uint8_t byte)
 {
   if (uart_task_started) {
     uint32_t cpsr = enter_critical();
+    spinlock_acquire(&uart_buf_lock);
     uart_tx(byte);
+    spinlock_release(&uart_buf_lock);
     exit_critical(cpsr);
     semaphore_give(&uart_data_ready);
   }
@@ -292,9 +302,11 @@ void uart_print(const char *str)
 {
   if (uart_task_started) {
     uint32_t cpsr = enter_critical();
+    spinlock_acquire(&uart_buf_lock);
     while (*str) {
       uart_tx((uint8_t)*str++);
     }
+    spinlock_release(&uart_buf_lock);
     exit_critical(cpsr);
     semaphore_give(&uart_data_ready);
   }

@@ -64,7 +64,10 @@ task that lives on a different core's ready list. `Semaphore`/`Mutex` each
 carry their own separate `Spinlock` too (they aren't owned by any one core —
 their waiters can belong to different cores). `heap.c` owns one guarding the
 bump allocator against concurrent `heap_malloc()` calls from different
-cores' `task_create()`.
+cores' `task_create()`. `uart.c` owns one (`uart_buf_lock`) guarding the
+ring-buffer reserve-a-slot-and-write step in `uart_tx()`, so
+`uart_send_byte()`/`uart_print()`/`uart_printf()` are safe to call from any
+core, not just the one that ran `uart_task_start()`.
 
 Not reentrant — do not acquire a `Spinlock` from a context that might already
 hold it on the same core. Lock order matters when more than one is held at

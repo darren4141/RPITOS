@@ -1,6 +1,6 @@
 #include "gic.h"
 
-#include "smp.h"
+#include "companion_core.h"
 
 #define GICD_BASE      0xFF841000
 #define GICC_BASE      0xFF842000
@@ -16,6 +16,17 @@
 #define GICC_PMR       (0x004 / 4)
 
 #define CORE_TIMER_IRQCNTL(n) (*(volatile uint32_t *)(ARM_LOCAL_BASE + 0x40 + (n) * 4))
+
+// ARM Local per-core mailboxes — a separate, non-GIC signal used for
+// companion-core IPIs (see companion_core_soft_reset_plan.md's "Why mailbox,
+// not SGI": GICD_IGROUPR is confirmed write-ignored from this Non-secure-only
+// OS, so GIC SGIs can never be delivered here; these bypass the GIC entirely,
+// same reasoning as CORE_TIMER_IRQCNTL above). Mailbox 0 specifically —
+// matches Linux's own convention for IPIs; mailbox 3 is already used by the
+// boot ROM/bootstrap's one-time secondary-core release kick (see
+// bootstrap/startup.s), 1 and 2 are unused by anything in this codebase.
+#define CORE_MBOX_IRQCNTL(n)  (*(volatile uint32_t *)(ARM_LOCAL_BASE + 0x50 + (n) * 4))
+#define CORE_MBOX0_SET(n)     (*(volatile uint32_t *)(ARM_LOCAL_BASE + 0x80 + (n) * 0x10))
 
 void gic_distributor_init(void)
 {
@@ -54,7 +65,13 @@ void gic_percore_init(void)
   // 5. Route nCNTPNSIRQ to this core's IRQ via the ARM Local controller (one
   // distinct MMIO address per core), not the GIC's own PPI 30 path — see
   // docs.md for why.
-  CORE_TIMER_IRQCNTL(smp_core_id()) |= (1 << 1);   // nCNTPNSIRQ → this core's IRQ
+  CORE_TIMER_IRQCNTL(companion_core_id()) |= (1 << 1);   // nCNTPNSIRQ → this core's IRQ
+
+  // 6. Enable this core's ARM Local mailbox 0 IRQ — the companion-core IPI
+  // signal (see the CORE_MBOX_IRQCNTL comment above). Bit 0 of this register
+  // is mailbox 0's IRQ enable (bits [3:0] = mailboxes 0-3, mirroring
+  // CORE_TIMER_IRQCNTL's IRQ/FIQ split above).
+  CORE_MBOX_IRQCNTL(companion_core_id()) |= (1U << 0);
 
   __asm__ volatile ("dsb sy" ::: "memory");
 }
@@ -86,13 +103,26 @@ void gic_enable_spi(uint32_t intid, uint8_t priority)
   __asm__ volatile ("dsb sy" ::: "memory");
 }
 
+void gic_send_mailbox_ipi(uint32_t target_core)
+{
+  // Any nonzero value triggers the target core's mailbox 0 IRQ; the value
+  // itself carries no meaning here (this mailbox is reserved for a single
+  // purpose — see the CORE_MBOX_IRQCNTL comment). Cleared by the receiving
+  // core reading its own Mailbox 0 RDCLR register (startup.s's
+  // _irq_handler) — reading it clears it, there's no separate write-to-clear.
+  CORE_MBOX0_SET(target_core) = 1U;
+
+  __asm__ volatile ("dsb sy" ::: "memory");
+}
+
 void gic_disable(void)
 {
   volatile uint32_t *gicc = (volatile uint32_t *)GICC_BASE;
 
-  gicc[GICC_CTLR] = 0;   // this core's CPU interface only — GICD_CTLR is left alone (shared by every other core)
+  gicc[GICC_CTLR] = 0;                                   // this core's CPU interface only — GICD_CTLR is left alone (shared by every other core)
 
-  CORE_TIMER_IRQCNTL(smp_core_id()) &= ~(1U << 1);   // undo nCNTPNSIRQ → this core's IRQ routing
+  CORE_TIMER_IRQCNTL(companion_core_id()) &= ~(1U << 1); // undo nCNTPNSIRQ → this core's IRQ routing
+  CORE_MBOX_IRQCNTL(companion_core_id()) &= ~(1U << 0);  // undo mailbox 0 IRQ routing
 
   __asm__ volatile ("dsb sy" ::: "memory");
 }

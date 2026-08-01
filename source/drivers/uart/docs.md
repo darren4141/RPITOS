@@ -7,6 +7,18 @@ PL011 UART0 driver. Two build modes, selected by `UART_MINIMAL`:
 - **Minimal mode** (`UART_MINIMAL` defined, used by the bootloader): blocking
   TX, no task, no ring buffer, no RX interrupt.
 
+## Multicore
+
+`uart_send_byte()`/`uart_print()`/`uart_printf()` are safe to call from any
+core once `uart_task_start()` has run on the (single, still core-0-owned)
+UART hardware. The ring buffer's reserve-a-slot-and-write step in `uart_tx()`
+is guarded by its own `Spinlock` (`uart_buf_lock`), nested inside the
+existing `enter_critical()` — `enter_critical()` alone only stops same-core
+preemption, so without the spinlock two cores producing concurrently would
+race `p_uart_buf_right`/`uart_buf[]`. `semaphore_give(&uart_data_ready)`
+wakes `uart_tx_task` correctly regardless of which core produced the bytes,
+since `Semaphore` is itself cross-core safe — see `spinlock/docs.md`.
+
 ## Build-time flags (full mode only)
 
 - `UART_TX_DMA` (default `1`): TX path selector. `1` drives TX via DMA Lite

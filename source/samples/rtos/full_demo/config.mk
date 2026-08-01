@@ -2,7 +2,7 @@
 SAMPLE_DRIVERS         := gpio uart gentimer gic jtag reset interrupts watchdog emmc crc dma
 
 # RTOS kernel components to compile
-SAMPLE_KERNEL          := scheduler task semaphore mutex queue heap software_timer smp spinlock
+SAMPLE_KERNEL          := scheduler task semaphore mutex queue heap software_timer companion_core spinlock
 
 # Boot-domain components
 SAMPLE_BOOT_COMPONENTS := dfu_trigger boot_flags

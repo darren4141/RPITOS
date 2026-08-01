@@ -1,7 +1,7 @@
 #ifndef SCHEDULER_H
 #define SCHEDULER_H
 
-#include "smp.h"
+#include "companion_core.h"
 #include "status.h"
 #include "task_types.h"
 
@@ -11,7 +11,7 @@
 // scheduler. Referenced directly by symbol name from startup/startup.s's
 // _irq_handler and start_first_task, which index it by MPIDR & 3 — keep this
 // declaration in sync with those.
-extern TaskControlBlock *p_task_control_block[SMP_MAX_CORES];
+extern TaskControlBlock *p_task_control_block[COMPANION_CORE_MAX_CORES];
 
 /**
  * @brief Initialize the calling core's own scheduler instance: link its clock-frequency/tick-count cells, reset its ready/blocked lists, and create its idle task.
@@ -31,7 +31,7 @@ StatusCode scheduler_init(uint32_t core_id, volatile uint32_t *p_clk_freq, uint3
  * core M's — a task's core_id never changes, so every scheduler operation
  * only ever needs exactly one core's lock: same-core callers
  * (scheduler_switch_context, timer_tick_handler, task_create, block_until)
- * pass smp_core_id(); cross-core callers (semaphore_give, mutex_unlock,
+ * pass companion_core_id(); cross-core callers (semaphore_give, mutex_unlock,
  * scheduler_change_task_priority) pass the *target* task's tcb->core_id.
  * scheduler_add_to_ready_list()/scheduler_remove_from_ready_list()/
  * scheduler_add_to_blocked_list()/scheduler_remove_from_blocked_list()/
