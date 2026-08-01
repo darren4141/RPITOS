@@ -71,6 +71,7 @@ struct TaskControlBlock {
   uint16_t stack_depth;
 
   uint16_t task_id;
+  uint32_t core_id;                  // which core's scheduler (ready/blocked lists) this task belongs to
 
   volatile TaskState current_state;
   TaskPriorityLevel priority;

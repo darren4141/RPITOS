@@ -124,7 +124,7 @@ void kmain(void)
     uart_print("*** previous reset caused by watchdog timeout ***\r\n");
   }
 
-  scheduler_init(&clk_freq, hz, &tick_count);
+  scheduler_init(0, &clk_freq, hz, &tick_count);
 
 
   uart_print("Starting main...\r\n");
@@ -160,7 +160,8 @@ void kmain(void)
   }
 
   uart_print("Initializing GIC...\r\n");
-  gic_init();
+  gic_distributor_init();
+  gic_percore_init();
 
   uart_print("Initializing General Timer...\r\n");
   gentimer_init(&clk_freq, hz);

@@ -164,22 +164,51 @@ _sec_post_hyp$:
     dsb
     isb
 
-    @ ---- Per-core banked stacks + VBAR so this core can handle/report faults --
+    @ ---- Per-core banked stacks (all 6 modes) + VBAR so this core can run
+    @ real IRQ-driven scheduling and report faults --------------------------
     mrc  p15, 0, r0, c0, c0, 5   @ MPIDR
-    and  r0, r0, #0x3            @ coreid (1..3)
-    sub  r1, r0, #1
-    lsl  r1, r1, #11            @ (coreid-1) * 0x800
-    ldr  r3, =_sec_stack_top
-    sub  r3, r3, r1             @ r3 = this core's stack top
+    and  r0, r0, #0x3            @ coreid (1..3) — kept in r0 for the mailbox
+                                  @ address computation at the bottom of this
+                                  @ function; not touched again until then.
+    sub  r4, r0, #1              @ (coreid-1) — index into each per-mode region
 
-    msr  cpsr_c, #0xD7          @ ABT mode (I=1,F=1)
-    sub  sp, r3, #0x400
-    msr  cpsr_c, #0xD3          @ back to SVC mode
-    mov  sp, r3
+    msr  cpsr_c, #0xD1           @ FIQ mode (I=1,F=1)
+    ldr  r3, =_sec_fiq_stack_top
+    lsl  r1, r4, #6                @ * 0x40
+    sub  sp, r3, r1
 
-    @ VBAR -> bootstrap vector table (_start, 0x8000): resident, and its data
-    @ abort handler prints PC/DFAR/DFSR over UART instead of hanging.
-    ldr  r2, =_start
+    msr  cpsr_c, #0xD2           @ IRQ mode
+    ldr  r3, =_sec_irq_stack_top
+    lsl  r1, r4, #10              @ * 0x400
+    sub  sp, r3, r1
+
+    msr  cpsr_c, #0xD7           @ ABT mode
+    ldr  r3, =_sec_abt_stack_top
+    lsl  r1, r4, #8                @ * 0x100
+    sub  sp, r3, r1
+
+    msr  cpsr_c, #0xDB           @ UND mode
+    ldr  r3, =_sec_und_stack_top
+    lsl  r1, r4, #7                @ * 0x80
+    sub  sp, r3, r1
+
+    msr  cpsr_c, #0xDF           @ SYS mode
+    ldr  r3, =_sec_sys_stack_top
+    lsl  r1, r4, #6                @ * 0x40
+    sub  sp, r3, r1
+
+    msr  cpsr_c, #0xD3           @ back to SVC mode
+    ldr  r3, =_sec_svc_stack_top
+    lsl  r1, r4, #10               @ * 0x400
+    sub  sp, r3, r1
+
+    @ VBAR -> the app's real vector table (APP_START_ADDR) instead of the
+    @ bootstrap's own stub table. This is what lets a released secondary take
+    @ real timer-tick/context-switch IRQs once it starts its own per-core
+    @ kmain — the bootstrap's own _irq_handler is just `b _irq_handler`.
+    @ Fixed cross-image address, same pattern as CORE_MAILBOX_ADDR — KEEP IN
+    @ SYNC with APP_START_ADDR in memory_map.h.
+    ldr  r2, =0x88400            @ APP_START_ADDR
     mcr  p15, 0, r2, c12, c0, 0
     isb
 

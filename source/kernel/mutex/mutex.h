@@ -1,6 +1,7 @@
 #ifndef MUTEX_H
 #define MUTEX_H
 
+#include "spinlock.h"
 #include "status.h"
 #include "task_types.h"
 
@@ -17,6 +18,10 @@ struct Mutex {
   List               mutex_blocked_list;
   uint8_t            inheritance_enabled;
   TaskPriorityLevel  inherited_priority;  // highest priority among current waiters
+  // A mutex isn't owned by any one core (its waiters can belong to different
+  // cores' schedulers), so it carries its own lock rather than relying on
+  // any core's scheduler lock. See spinlock/docs.md.
+  Spinlock           lock;
 };
 
 /**
@@ -31,11 +36,16 @@ StatusCode mutex_set_inheritance(Mutex *mtx, uint8_t enable);
 
 /**
  * @brief Lock the mutex, blocking up to timeout_ms. Boosts the owner's priority if inheritance is enabled and the caller is higher priority.
+ * @note Safe to call from a task on any core, including when the current
+ * owner belongs to a different core than the caller.
  */
 StatusCode mutex_lock(Mutex *mtx, int64_t timeout_ms);
 
 /**
  * @brief Unlock the mutex, restoring the owner's original priority and waking the next waiter.
+ * @note Safe to call even when the waiter being woken belongs to a
+ * different core than the caller — it's placed back on its own core's
+ * ready list.
  */
 void mutex_unlock(Mutex *mtx);
 
