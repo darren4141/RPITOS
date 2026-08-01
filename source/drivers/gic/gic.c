@@ -1,10 +1,6 @@
 #include "gic.h"
 
-  << << << < HEAD
-#include "smp.h"
-== == == =
 #include "companion_core.h"
-  >> >> >> > 10d4a98(multicore improvements)
 
 #define GICD_BASE      0xFF841000
 #define GICC_BASE      0xFF842000
@@ -21,8 +17,6 @@
 
 #define CORE_TIMER_IRQCNTL(n) (*(volatile uint32_t *)(ARM_LOCAL_BASE + 0x40 + (n) * 4))
 
-    << << << < HEAD
-    == == == =
 // ARM Local per-core mailboxes — a separate, non-GIC signal used for
 // companion-core IPIs (see companion_core_soft_reset_plan.md's "Why mailbox,
 // not SGI": GICD_IGROUPR is confirmed write-ignored from this Non-secure-only
@@ -34,8 +28,7 @@
 #define CORE_MBOX_IRQCNTL(n)  (*(volatile uint32_t *)(ARM_LOCAL_BASE + 0x50 + (n) * 4))
 #define CORE_MBOX0_SET(n)     (*(volatile uint32_t *)(ARM_LOCAL_BASE + 0x80 + (n) * 0x10))
 
-    >> >> >> > 10d4a98(multicore improvements)
-    void gic_distributor_init(void)
+void gic_distributor_init(void)
 {
   volatile uint32_t *gicd = (volatile uint32_t *)GICD_BASE;
 
@@ -72,16 +65,13 @@ void gic_percore_init(void)
   // 5. Route nCNTPNSIRQ to this core's IRQ via the ARM Local controller (one
   // distinct MMIO address per core), not the GIC's own PPI 30 path — see
   // docs.md for why.
-    << << << < HEAD CORE_TIMER_IRQCNTL(smp_core_id()) |= (1 << 1); // nCNTPNSIRQ → this core's IRQ
-  == == == =
-    CORE_TIMER_IRQCNTL(companion_core_id()) |= (1 << 1);           // nCNTPNSIRQ → this core's IRQ
+  CORE_TIMER_IRQCNTL(companion_core_id()) |= (1 << 1);   // nCNTPNSIRQ → this core's IRQ
 
   // 6. Enable this core's ARM Local mailbox 0 IRQ — the companion-core IPI
   // signal (see the CORE_MBOX_IRQCNTL comment above). Bit 0 of this register
   // is mailbox 0's IRQ enable (bits [3:0] = mailboxes 0-3, mirroring
   // CORE_TIMER_IRQCNTL's IRQ/FIQ split above).
   CORE_MBOX_IRQCNTL(companion_core_id()) |= (1U << 0);
-  >> >> >> > 10d4a98(multicore improvements)
 
   __asm__ volatile ("dsb sy" ::: "memory");
 }
