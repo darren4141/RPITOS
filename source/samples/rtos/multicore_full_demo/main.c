@@ -229,12 +229,12 @@ void kmain(void)
     uart_print("core 0: companion_core_start(2) failed\r\n");
   }
 
-  if (companion_core_start(3U, core3_kmain) == E_OK) {
-    uart_print("core 0: released core 3\r\n");
-  }
-  else {
-    uart_print("core 0: companion_core_start(3) failed\r\n");
-  }
+  // if (companion_core_start(3U, core3_kmain) == E_OK) {
+  // uart_print("core 0: released core 3\r\n");
+  // }
+  // else {
+  // uart_print("core 0: companion_core_start(3) failed\r\n");
+  // }
 
   __asm__ volatile ("cpsie i" ::: "memory");
 
