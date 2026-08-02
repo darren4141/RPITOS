@@ -6,6 +6,7 @@
 #include "dfu_trigger.h"
 #include "interrupts.h"
 #include "spinlock.h"
+#include "telemetry.h"
 #include "uart.h"
 
 #define IDLE_STACK_DEPTH 64
@@ -116,11 +117,6 @@ StatusCode scheduler_init(uint32_t core_id, volatile uint32_t *p_clk_freq, uint3
   core->idle_tcb.stack_depth = IDLE_STACK_DEPTH;
   core->idle_tcb.task_id = 0xFFFFU;
   core->idle_tcb.core_id = core_id;
-  core->idle_tcb.name[0] = 'i';
-  core->idle_tcb.name[1] = 'd';
-  core->idle_tcb.name[2] = 'l';
-  core->idle_tcb.name[3] = 'e';
-  core->idle_tcb.name[4] = '\0';
   core->idle_tcb.priority = TASK_PRIORITY_IDLE;
   core->idle_tcb.base_priority = TASK_PRIORITY_IDLE;
   core->idle_tcb.mutexes_held = 0;
@@ -129,6 +125,13 @@ StatusCode scheduler_init(uint32_t core_id, volatile uint32_t *p_clk_freq, uint3
   core->idle_tcb.wakeup_reason = WAKEUP_REASON_NONE;
   core->idle_tcb.state_list_item = (ListItem) { NULL, NULL, &core->idle_tcb, NULL };
   core->idle_tcb.event_list_item = (ListItem) { NULL, NULL, &core->idle_tcb, NULL };
+
+  // Idle never goes through task_create(), so it needs its own one-shot
+  // report — same telemetry_report_task_created() call, same "never stored
+  // in the TCB" rule (see md/client/device/instrumentation.md's postmortem).
+#ifdef RTOS_TELEMETRY
+  telemetry_report_task_created(core->idle_tcb.task_id, core_id, (uint8_t)TASK_PRIORITY_IDLE, "idle");
+#endif
 
   TaskControlBlock *p_idle = &core->idle_tcb;
   scheduler_lock(core_id);

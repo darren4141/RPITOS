@@ -1,5 +1,6 @@
-#include "task.h"
 #include "companion_core.h"
+#include "task.h"
+#include "telemetry.h"
 #include "uart.h"
 
 #include <stddef.h>
@@ -76,12 +77,11 @@ StatusCode task_create(TaskFunction task_function, uint16_t stack_depth, TaskPri
   (*p_task_control_block)->core_id = core_id;
   task_counter[core_id]++;
 
-  int name_len = 0;
-  while ((name != NULL) && (name[name_len] != '\0') && (name_len < TASK_NAME_MAX - 1)) {
-    (*p_task_control_block)->name[name_len] = name[name_len];
-    name_len++;
-  }
-  (*p_task_control_block)->name[name_len] = '\0';
+#ifdef RTOS_TELEMETRY
+  telemetry_report_task_created((*p_task_control_block)->task_id, core_id, (uint8_t)priority, name);
+#else
+  (void)name;
+#endif
 
   (*p_task_control_block)->priority = priority;
   (*p_task_control_block)->base_priority = priority;
