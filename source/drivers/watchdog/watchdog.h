@@ -100,12 +100,13 @@ void watchdog_disable(void);
  */
 void watchdog_trigger_reset(void);
 
-// Watchdog kick task — kicks every 2 s. Requires watchdog_init() with a
-// timeout > 2 s. Define WATCHDOG_MINIMAL to exclude this (bootloader).
+// Watchdog kick — kicks every 2 s via a periodic software timer (no dedicated
+// task). Requires watchdog_init() with a timeout > 2 s. Define
+// WATCHDOG_MINIMAL to exclude this (bootloader).
 #ifndef WATCHDOG_MINIMAL
 
 /**
- * @brief Start the background task that kicks the watchdog every WDT_KICK_PERIOD ms.
+ * @brief Arm the periodic software timer that kicks the watchdog every WDT_KICK_PERIOD ms, plus the one-shot confirm-slot timer. Both run as callbacks on the shared software-timer service task — no dedicated task of their own.
  */
 StatusCode watchdog_task_start(void);
 

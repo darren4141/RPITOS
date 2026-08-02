@@ -27,12 +27,22 @@ static volatile uint32_t g_shared_counter = 0;
 static Semaphore g_ping_sem;       // core 0 gives, core 1 takes
 static Queue g_msg_queue;          // core 2 sends, core 0 receives — core 3 is dedicated to telemetry, see below
 
+// Strict producer/consumer handshake between core 1 and core 2 — unlike
+// g_ping_sem (one-directional, fire-and-forget), this is a full round trip:
+// each side is blocked waiting on the other for a real, visible duration
+// every cycle, specifically to give the dashboard long, obvious
+// PKT_TASK_BLOCKED/PKT_TASK_UNBLOCKED spans to show, not just brief
+// contention. See handshake_producer_task()/handshake_consumer_task().
+static Semaphore g_data_ready_sem;       // core 1 gives once data's "produced", core 2 takes
+static Semaphore g_processing_done_sem;  // core 2 gives once "processed", core 1 takes
+
 // ── Core 0
 static volatile uint32_t clk_freq;
 static volatile uint64_t tick_count = 0;
 static TaskControlBlock *tcb_mutex0 = NULL;
 static TaskControlBlock *tcb_ping = NULL;
 static TaskControlBlock *tcb_queue_recv = NULL;
+static TaskControlBlock *tcb_grind0 = NULL;
 
 // ── Core 1
 static volatile uint32_t core1_clk_freq;
@@ -46,11 +56,29 @@ static volatile uint64_t core2_tick_count = 0;
 static volatile uint32_t core3_clk_freq;
 static volatile uint64_t core3_tick_count = 0;
 
+// Busy-spins the calling task for roughly ms milliseconds — real RUNNING
+// time (shows up as such in telemetry), not a blocking delay. Used to make
+// contention/idle-time visible on the dashboard instead of everything
+// finishing near-instantly.
+static void busy_work_ms(uint64_t ms)
+{
+  uint64_t start = scheduler_get_tick_count();
+  volatile uint32_t churn = 0;
+  while ((scheduler_get_tick_count() - start) < ms) {
+    churn++;
+  }
+}
+
 // One task, run identically on all four cores — reads its own core id at
 // runtime rather than being copy-pasted per core. Demonstrates mutex_lock()/
 // mutex_unlock() genuinely serializing a shared resource across four
 // independent per-core schedulers: the printed sequence should show every
 // value exactly once, in order, regardless of which core produced it.
+// Holds the mutex for a visible ~30 ms (busy_work_ms, not a delay — the
+// holder keeps running) specifically so the other two cores' waiters block
+// for a real, observable duration instead of the near-instant contention a
+// bare increment would produce — makes PKT_TASK_BLOCKED/PKT_TASK_UNBLOCKED
+// mean something on the dashboard.
 static void mutex_counter_task(void *params)
 {
   (void)params;
@@ -59,8 +87,22 @@ static void mutex_counter_task(void *params)
     mutex_lock(&g_counter_mutex, -1);
     g_shared_counter++;
     uart_printf("core %u: shared counter now %u\r\n", my_core, g_shared_counter);
+    busy_work_ms(30U);
     mutex_unlock(&g_counter_mutex);
     task_delay_ms(300U);
+  }
+}
+
+// CPU-bound filler task, one per app core (0-2) — keeps the core genuinely
+// busy between the lighter-weight demo tasks' delays, so the dashboard shows
+// real utilization instead of near-100% idle. Lowest app priority so it
+// never delays ping/pong/queue traffic, just fills whatever time is left.
+static void grind_task(void *params)
+{
+  (void)params;
+  while (1) {
+    busy_work_ms(50U);
+    task_delay_ms(15U);
   }
 }
 
@@ -90,6 +132,43 @@ static void pong_task(void *params)
   }
 }
 
+// Core 1 — "produces data" (just busy work, doesn't matter what), hands it
+// off, then blocks waiting for core 2 to finish "processing" it before
+// producing again. Strict alternation with handshake_consumer_task(): while
+// one side works, the other is blocked, every cycle — long, visible
+// PKT_TASK_BLOCKED spans on purpose.
+static void handshake_producer_task(void *params)
+{
+  (void)params;
+  uint32_t batch = 0;
+  while (1) {
+    busy_work_ms(40U);   // "producing"
+    uart_printf("core 1: produced batch %u, handing off\r\n", batch);
+    semaphore_give(&g_data_ready_sem);
+
+    semaphore_take(&g_processing_done_sem, SEMAPHORE_TAKE_BLOCKING);
+    uart_printf("core 1: batch %u acked, producing next\r\n", batch);
+    batch++;
+  }
+}
+
+// Core 2 — blocks waiting for core 1's data, "processes" it (busy work,
+// deliberately longer than the producer's — makes the two sides' blocked
+// durations visibly asymmetric on the dashboard), then hands the ack back.
+static void handshake_consumer_task(void *params)
+{
+  (void)params;
+  uint32_t batch = 0;
+  while (1) {
+    semaphore_take(&g_data_ready_sem, SEMAPHORE_TAKE_BLOCKING);
+    uart_printf("core 2: processing batch %u\r\n", batch);
+    busy_work_ms(60U);   // "processing"
+    uart_printf("core 2: batch %u done\r\n", batch);
+    semaphore_give(&g_processing_done_sem);
+    batch++;
+  }
+}
+
 // Core 2 — queue producer side.
 static void queue_send_task(void *params)
 {
@@ -103,7 +182,7 @@ static void queue_send_task(void *params)
     else {
       uart_print("core 2: queue full, send timed out\r\n");
     }
-    task_delay_ms(400U);
+    task_delay_ms(150U);
   }
 }
 
@@ -137,6 +216,8 @@ static void core1_kmain(void)
   uart_tx_raw('[');uart_tx_raw('1');uart_tx_raw('1');uart_tx_raw(']');   // DEBUG: mutex_counter_task created
   task_create(pong_task, 2048, TASK_PRIORITY_2, NULL, "pong", &tcb);
   uart_tx_raw('[');uart_tx_raw('1');uart_tx_raw('2');uart_tx_raw(']');   // DEBUG: pong_task created
+  task_create(handshake_producer_task, 2048, TASK_PRIORITY_2, NULL, "hs_producer", &tcb);
+  task_create(grind_task, 2048, TASK_PRIORITY_1, NULL, "grind1", &tcb);
 
   // NOT cpsie i here — p_task_control_block[core_id] is still NULL until
   // scheduler_switch_context() (called inside scheduler_start()) sets it; an
@@ -162,6 +243,8 @@ static void core2_kmain(void)
   uart_tx_raw('[');uart_tx_raw('2');uart_tx_raw('1');uart_tx_raw(']'); // DEBUG: mutex_counter_task created
   task_create(queue_send_task, 2048, TASK_PRIORITY_2, NULL, "queue_send", &tcb);
   uart_tx_raw('[');uart_tx_raw('2');uart_tx_raw('2');uart_tx_raw(']'); // DEBUG: queue_send_task created
+  task_create(handshake_consumer_task, 2048, TASK_PRIORITY_2, NULL, "hs_consumer", &tcb);
+  task_create(grind_task, 2048, TASK_PRIORITY_1, NULL, "grind2", &tcb);
 
   // NOT cpsie i here — see core1_kmain's comment above the same point.
   uart_tx_raw('[');uart_tx_raw('2');uart_tx_raw('R');uart_tx_raw(']'); // DEBUG: about to scheduler_start
@@ -229,6 +312,8 @@ void kmain(void)
 
   mutex_init(&g_counter_mutex);
   semaphore_init(&g_ping_sem, 1, 0);
+  semaphore_init(&g_data_ready_sem, 1, 0);
+  semaphore_init(&g_processing_done_sem, 1, 0);
   queue_init(&g_msg_queue, 4, sizeof(uint32_t));
   uart_tx_raw('[');uart_tx_raw('S');uart_tx_raw('Y');uart_tx_raw(']'); // DEBUG: mutex/semaphore/queue init done
 
@@ -238,6 +323,8 @@ void kmain(void)
   uart_tx_raw('[');uart_tx_raw('T');uart_tx_raw('2');uart_tx_raw(']'); // DEBUG: ping_task created
   task_create(queue_recv_task, 2048, TASK_PRIORITY_2, NULL, "queue_recv", &tcb_queue_recv);
   uart_tx_raw('[');uart_tx_raw('T');uart_tx_raw('3');uart_tx_raw(']'); // DEBUG: queue_recv_task created
+  task_create(grind_task, 2048, TASK_PRIORITY_1, NULL, "grind0", &tcb_grind0);
+  uart_tx_raw('[');uart_tx_raw('T');uart_tx_raw('4');uart_tx_raw(']'); // DEBUG: grind_task created
 
   watchdog_task_start();
   uart_tx_raw('[');uart_tx_raw('W');uart_tx_raw('T');uart_tx_raw(']'); // DEBUG: watchdog_task_start done

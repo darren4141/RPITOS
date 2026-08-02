@@ -8,10 +8,7 @@
 #include "emmc.h"
 
 #ifndef WATCHDOG_MINIMAL
-#include "scheduler.h"
-#include "semaphore.h"
 #include "software_timer.h"
-#include "task.h"
 #endif
 
 #define PM_RSTC             (*(volatile uint32_t *)(PM_BASE + PM_RSTC_OFFSET))
@@ -170,8 +167,6 @@ void watchdog_trigger_reset(void)
 static int64_t s_confirm_delay_ms = 0;
 static SoftwareTimer s_watchdog_kick_timer;
 static SoftwareTimer s_confirm_timer;
-static Semaphore s_confirm_semaphore;
-static TaskControlBlock *s_watchdog_confirm_tcb = NULL;
 
 static uint32_t s_watchdog_kick_count = 0U;
 
@@ -182,24 +177,16 @@ static void watchdog_kick_cb(void *params)
   s_watchdog_kick_count++;
 }
 
-// Fast: only signals the dedicated confirm task. No eMMC I/O here.
+// Runs directly on the shared software-timer service task — no dedicated
+// task/semaphore handoff. wdt_meta_confirm_slot() is one eMMC read + one
+// write (low-single-digit ms, per boot-log timing elsewhere in this repo);
+// this fires once, ever, per boot, so briefly delaying the next timer
+// callback in line is a non-issue — not worth a whole task+semaphore just to
+// get this off the shared task's stack.
 static void watchdog_confirm_timer_cb(void *arg)
 {
   (void)arg;
-  semaphore_give(&s_confirm_semaphore);
-}
-
-// Does the actual (slow, eMMC-heavy) confirm work, on its own stack, isolated
-// from the shared software-timer service task.
-static void watchdog_confirm_task(void *params)
-{
-  (void)params;
-  semaphore_take(&s_confirm_semaphore, SEMAPHORE_TAKE_BLOCKING);
   wdt_meta_confirm_slot();
-
-  while (1) {
-    task_delay_ms(60000);
-  }
 }
 
 StatusCode watchdog_set_confirm_slot_timing(uint64_t new_time_ms)
@@ -224,13 +211,6 @@ StatusCode watchdog_task_start(void)
 
   if (s_confirm_delay_ms >= 0) {
     uint64_t delay = (s_confirm_delay_ms > 0) ? (uint64_t)s_confirm_delay_ms : 1U;
-
-    semaphore_init(&s_confirm_semaphore, 1U, 0U);
-
-    ret = task_create(watchdog_confirm_task, 512, TASK_PRIORITY_1, NULL, "wdt_confirm", &s_watchdog_confirm_tcb);
-    if (ret != E_OK) {
-      return ret;
-    }
 
     ret = software_timer_create(&s_confirm_timer, delay, watchdog_confirm_timer_cb, TIMER_MODE_ONE_SHOT);
     if (ret != E_OK) {

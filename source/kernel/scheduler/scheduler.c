@@ -268,6 +268,12 @@ void scheduler_switch_context(void)
       current = core->ready_list[i].index->owner;
       current->current_state = TASK_STATE_RUNNING;
       p_task_control_block[core_id] = current;
+#ifdef RTOS_TELEMETRY
+      // Cheap by design (lock, copy ~5 bytes, unlock) — see telemetry.h's doc
+      // comment. Never touches the UART itself, so this doesn't add UART
+      // transmission latency to the hot path, only the ring push.
+      telemetry_report_tick_state(core_id, current->task_id, (uint8_t)current->current_state);
+#endif
       scheduler_unlock(core_id);
       return;
     }
@@ -340,6 +346,11 @@ StatusCode scheduler_add_to_blocked_list(TaskControlBlock *tcb, uint64_t wakeup_
   }
 
   blocked_task_list->num_items++;
+
+#ifdef RTOS_TELEMETRY
+  telemetry_report_task_blocked(tcb->task_id, tcb->core_id);
+#endif
+
   return E_OK;
 }
 
@@ -375,6 +386,10 @@ StatusCode scheduler_remove_from_blocked_list(TaskControlBlock *tcb)
   item->next = NULL;
   item->prev = NULL;
   item->container = NULL;
+
+#ifdef RTOS_TELEMETRY
+  telemetry_report_task_unblocked(tcb->task_id, tcb->core_id);
+#endif
 
   return E_OK;
 }
