@@ -116,6 +116,11 @@ StatusCode scheduler_init(uint32_t core_id, volatile uint32_t *p_clk_freq, uint3
   core->idle_tcb.stack_depth = IDLE_STACK_DEPTH;
   core->idle_tcb.task_id = 0xFFFFU;
   core->idle_tcb.core_id = core_id;
+  core->idle_tcb.name[0] = 'i';
+  core->idle_tcb.name[1] = 'd';
+  core->idle_tcb.name[2] = 'l';
+  core->idle_tcb.name[3] = 'e';
+  core->idle_tcb.name[4] = '\0';
   core->idle_tcb.priority = TASK_PRIORITY_IDLE;
   core->idle_tcb.base_priority = TASK_PRIORITY_IDLE;
   core->idle_tcb.mutexes_held = 0;

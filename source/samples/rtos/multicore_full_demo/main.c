@@ -12,6 +12,7 @@
 #include "semaphore.h"
 #include "software_timer.h"
 #include "task.h"
+#include "telemetry.h"
 #include "uart.h"
 #include "watchdog.h"
 
@@ -24,13 +25,14 @@ static Mutex g_counter_mutex;      // contended by one task on every core
 static volatile uint32_t g_shared_counter = 0;
 
 static Semaphore g_ping_sem;       // core 0 gives, core 1 takes
-static Queue g_msg_queue;          // core 2 sends, core 3 receives
+static Queue g_msg_queue;          // core 2 sends, core 0 receives — core 3 is dedicated to telemetry, see below
 
 // ── Core 0
 static volatile uint32_t clk_freq;
 static volatile uint64_t tick_count = 0;
 static TaskControlBlock *tcb_mutex0 = NULL;
 static TaskControlBlock *tcb_ping = NULL;
+static TaskControlBlock *tcb_queue_recv = NULL;
 
 // ── Core 1
 static volatile uint32_t core1_clk_freq;
@@ -40,7 +42,7 @@ static volatile uint64_t core1_tick_count = 0;
 static volatile uint32_t core2_clk_freq;
 static volatile uint64_t core2_tick_count = 0;
 
-// ── Core 3
+// ── Core 3 — dedicated telemetry publisher, no app tasks (see core3_kmain)
 static volatile uint32_t core3_clk_freq;
 static volatile uint64_t core3_tick_count = 0;
 
@@ -105,16 +107,17 @@ static void queue_send_task(void *params)
   }
 }
 
-// Core 3 — queue consumer side. Blocks until core 2's queue_send_task sends —
+// Core 0 — queue consumer side. Blocks until core 2's queue_send_task sends —
 // demonstrates queue_recv() correctly waking a task on a different core than
-// the one that called queue_send().
+// the one that called queue_send(). (Runs on core 0, not core 3 — core 3 is
+// dedicated to telemetry, see core3_kmain.)
 static void queue_recv_task(void *params)
 {
   (void)params;
   uint32_t msg;
   while (1) {
     if (queue_recv(&g_msg_queue, &msg, SEMAPHORE_TAKE_BLOCKING) == E_OK) {
-      uart_printf("core 3: received msg %u\r\n", msg);
+      uart_printf("core 0: received msg %u\r\n", msg);
     }
   }
 }
@@ -126,8 +129,8 @@ static void core1_kmain(void)
   scheduler_init(1U, &core1_clk_freq, hz, &core1_tick_count);
 
   TaskControlBlock *tcb;
-  task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, &tcb);
-  task_create(pong_task, 2048, TASK_PRIORITY_2, NULL, &tcb);
+  task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, "mutex_ctr1", &tcb);
+  task_create(pong_task, 2048, TASK_PRIORITY_2, NULL, "pong", &tcb);
 
   __asm__ volatile ("cpsie i" ::: "memory");
   scheduler_start();     // never returns
@@ -140,22 +143,29 @@ static void core2_kmain(void)
   scheduler_init(2U, &core2_clk_freq, hz, &core2_tick_count);
 
   TaskControlBlock *tcb;
-  task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, &tcb);
-  task_create(queue_send_task, 2048, TASK_PRIORITY_2, NULL, &tcb);
+  task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, "mutex_ctr2", &tcb);
+  task_create(queue_send_task, 2048, TASK_PRIORITY_2, NULL, "queue_send", &tcb);
 
   __asm__ volatile ("cpsie i" ::: "memory");
   scheduler_start();     // never returns
 }
 
+// Core 3 — dedicated telemetry publisher. No RTOS-under-test tasks here on
+// purpose: this core exists solely to drain telemetry_send()'s output onto
+// UART0 at a steady rate, so it can never be starved by (or itself starve)
+// the mutex/semaphore/queue demo running on cores 0-2. See
+// md/client/device_instrumentation.md's "Publisher task" section — this is
+// the dedicated-core placement option.
 static void core3_kmain(void)
 {
   gic_percore_init();
   gentimer_init(&core3_clk_freq, hz);
   scheduler_init(3U, &core3_clk_freq, hz, &core3_tick_count);
 
+  uart_telemetry_init();   // dedicated UART3/GPIO4 — separate wire from UART0's console traffic
+
   TaskControlBlock *tcb;
-  task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, &tcb);
-  task_create(queue_recv_task, 2048, TASK_PRIORITY_2, NULL, &tcb);
+  task_create(telemetry_publisher_task, 2048, TASK_PRIORITY_1, NULL, "telemetry_pub", &tcb);
 
   __asm__ volatile ("cpsie i" ::: "memory");
   scheduler_start();     // never returns
@@ -167,10 +177,10 @@ void kmain(void)
 
   uart_init(UART_BAUDRATE_115200);
   uart_print("\r\n=== multicore_full_demo ===\r\n"
-             "core 0: RTOS — mutex counter + semaphore ping\r\n"
+             "core 0: RTOS — mutex counter + semaphore ping + queue receiver\r\n"
              "core 1: RTOS — mutex counter + semaphore pong\r\n"
              "core 2: RTOS — mutex counter + queue sender\r\n"
-             "core 3: RTOS — mutex counter + queue receiver\r\n\r\n");
+             "core 3: telemetry publisher (dedicated, no app tasks)\r\n\r\n");
 
   watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 1);
 
@@ -184,8 +194,9 @@ void kmain(void)
   semaphore_init(&g_ping_sem, 1, 0);
   queue_init(&g_msg_queue, 4, sizeof(uint32_t));
 
-  task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, &tcb_mutex0);
-  task_create(ping_task, 2048, TASK_PRIORITY_2, NULL, &tcb_ping);
+  task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, "mutex_ctr0", &tcb_mutex0);
+  task_create(ping_task, 2048, TASK_PRIORITY_2, NULL, "ping", &tcb_ping);
+  task_create(queue_recv_task, 2048, TASK_PRIORITY_2, NULL, "queue_recv", &tcb_queue_recv);
 
   watchdog_task_start();
 

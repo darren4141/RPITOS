@@ -111,6 +111,38 @@ void uart_deinit()
   gpio_set_function(15, GPIO_FUNC_INPUT);
 }
 
+// ── Dedicated telemetry UART (UART3) — see uart.h and transport_protocol.md ───
+#ifdef RTOS_TELEMETRY
+
+void uart_telemetry_init(void)
+{
+  gpio_set_function(TELEMETRY_UART_TX_PIN, GPIO_FUNC_ALT4);
+  gpio_set_pull(TELEMETRY_UART_TX_PIN, GPIO_PULL_NONE);
+
+  TELEMETRY_UART->CR &= ~1U;   // disable while configuring
+
+  uint32_t timeout = 10000;
+  while (TELEMETRY_UART->FR & FR_BUSY && timeout > 0) {
+    timeout--;
+  }
+
+  TELEMETRY_UART->LCRH &= ~LCRH_FEN;
+  TELEMETRY_UART->ICR = ICR_ALL;
+
+  TELEMETRY_UART->IBRD = TELEMETRY_UART_IBRD_921600;
+  TELEMETRY_UART->FBRD = TELEMETRY_UART_FBRD_921600;
+  TELEMETRY_UART->LCRH = LCRH_WLEN_8 | LCRH_FEN;
+  TELEMETRY_UART->CR = CR_UARTEN | CR_TXE;   // TX only — RX never enabled
+}
+
+void uart_telemetry_tx_raw(uint8_t byte)
+{
+  while (TELEMETRY_UART->FR & FR_TXFF) {}
+  TELEMETRY_UART->DR = byte;
+}
+
+#endif // RTOS_TELEMETRY
+
 // ── Full mode: ring-buffer TX + scheduler task ────────────────────────────────
 #ifndef UART_MINIMAL
 
@@ -262,7 +294,7 @@ StatusCode uart_task_start(void)
   irq_register(UART_IRQ_INTID, uart_rx_irq_handler);
   gic_enable_spi(UART_IRQ_INTID, 0x80);
 
-  StatusCode ret = task_create(uart_tx_task, 2048, TASK_PRIORITY_5, NULL, &uart_tcb);
+  StatusCode ret = task_create(uart_tx_task, 2048, TASK_PRIORITY_5, NULL, "uart_tx", &uart_tcb);
   if (ret == E_OK) {
     uart_task_started = true;
   }

@@ -5,6 +5,7 @@
 
 #define MAX_NUM_TASKS  16
 #define TASK_WATERMARK 0x5A
+#define TASK_NAME_MAX  16
 
 typedef enum {
   TASK_PRIORITY_IDLE = 0,
@@ -72,6 +73,7 @@ struct TaskControlBlock {
 
   uint16_t task_id;
   uint32_t core_id;                  // which core's scheduler (ready/blocked lists) this task belongs to
+  char name[TASK_NAME_MAX];          // set at task_create(); always NULL-terminated
 
   volatile TaskState current_state;
   TaskPriorityLevel priority;

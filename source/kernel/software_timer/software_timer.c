@@ -129,7 +129,7 @@ StatusCode software_timer_start()
 {
   StatusCode ret;
 
-  ret = task_create(software_timer_service_task, 512, TASK_PRIORITY_5, NULL, &software_timer_service_tcb);
+  ret = task_create(software_timer_service_task, 512, TASK_PRIORITY_5, NULL, "sw_timer", &software_timer_service_tcb);
   if (ret != E_OK) {
     return ret;
   }

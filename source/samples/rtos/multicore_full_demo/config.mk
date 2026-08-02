@@ -12,3 +12,8 @@ SAMPLE_BOOT_COMPONENTS := dfu_trigger boot_flags
 
 # Utility libraries
 SAMPLE_LIBS            :=
+
+# Core 3 is dedicated to the telemetry publisher (see md/client/) — link
+# telemetry.c and gate its instrumentation hooks/packet-emit code on.
+SAMPLE_TELEMETRY       := 1
+SAMPLE_EXTRA_CFLAGS    := -DRTOS_TELEMETRY

@@ -132,29 +132,29 @@ void kmain(void)
   uart_print("Creating tasks...\r\n");
 
 
-  ret = task_create(task_1_func, 2048, TASK_PRIORITY_5, NULL, &tcb_1);
+  ret = task_create(task_1_func, 2048, TASK_PRIORITY_5, NULL, "task_1", &tcb_1);
   if (ret != E_OK) {
     uart_printf("Create task 1 failed with exit code %d\r\n", ret);
   }
 
-  ret = task_create(task_4_func, 2048, TASK_PRIORITY_5, NULL, &tcb_4);
+  ret = task_create(task_4_func, 2048, TASK_PRIORITY_5, NULL, "task_4", &tcb_4);
   if (ret != E_OK) {
     uart_printf("Create task 4 failed with exit code %d\r\n", ret);
   }
 
 
-  ret = task_create(task_2_func, 2048, TASK_PRIORITY_3, NULL, &tcb_2);
+  ret = task_create(task_2_func, 2048, TASK_PRIORITY_3, NULL, "task_2", &tcb_2);
   if (ret != E_OK) {
     uart_printf("Create task 2 failed with exit code %d\r\n", ret);
   }
 
-  ret = task_create(task_3_func, 2048, TASK_PRIORITY_4, NULL, &tcb_3);
+  ret = task_create(task_3_func, 2048, TASK_PRIORITY_4, NULL, "task_3", &tcb_3);
   if (ret != E_OK) {
     uart_printf("Create task 3 failed with exit code %d\r\n", ret);
   }
 
 
-  ret = task_create(task_5_func, 2048, TASK_PRIORITY_1, NULL, &tcb_5);
+  ret = task_create(task_5_func, 2048, TASK_PRIORITY_1, NULL, "task_5", &tcb_5);
   if (ret != E_OK) {
     uart_printf("Create task 5 failed with exit code %d\r\n", ret);
   }

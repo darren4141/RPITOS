@@ -48,7 +48,7 @@ static void task_exit_trap(void)
   }
 }
 
-StatusCode task_create(TaskFunction task_function, uint16_t stack_depth, TaskPriorityLevel priority, void *task_params, TaskControlBlock **p_task_control_block)
+StatusCode task_create(TaskFunction task_function, uint16_t stack_depth, TaskPriorityLevel priority, void *task_params, const char *name, TaskControlBlock **p_task_control_block)
 {
   uint32_t core_id = companion_core_id();
 
@@ -75,6 +75,13 @@ StatusCode task_create(TaskFunction task_function, uint16_t stack_depth, TaskPri
   (*p_task_control_block)->task_id = task_counter[core_id];
   (*p_task_control_block)->core_id = core_id;
   task_counter[core_id]++;
+
+  int name_len = 0;
+  while ((name != NULL) && (name[name_len] != '\0') && (name_len < TASK_NAME_MAX - 1)) {
+    (*p_task_control_block)->name[name_len] = name[name_len];
+    name_len++;
+  }
+  (*p_task_control_block)->name[name_len] = '\0';
 
   (*p_task_control_block)->priority = priority;
   (*p_task_control_block)->base_priority = priority;
