@@ -182,10 +182,7 @@ static void watchdog_kick_cb(void *params)
   s_watchdog_kick_count++;
 }
 
-// Fast: only signals the dedicated confirm task. No eMMC I/O here — calling
-// wdt_meta_confirm_slot() directly from this callback silently overflowed
-// the shared software-timer service task's stack on real hardware. See
-// CLAUDE.md's "Known Issues / Debugging History" for the full postmortem.
+// Fast: only signals the dedicated confirm task. No eMMC I/O here.
 static void watchdog_confirm_timer_cb(void *arg)
 {
   (void)arg;

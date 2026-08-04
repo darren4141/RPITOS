@@ -25,7 +25,7 @@ static Mutex g_counter_mutex;      // contended by one task on every core
 static volatile uint32_t g_shared_counter = 0;
 
 static Semaphore g_ping_sem;       // core 0 gives, core 1 takes
-static Queue g_msg_queue;          // core 2 sends, core 0 receives — core 3 is dedicated to telemetry, see below
+static Queue g_msg_queue;          // core 2 sends, core 0 receives
 
 // Round-trip producer/consumer handshake between core 1 and core 2 — unlike
 // g_ping_sem (one-directional, fire-and-forget), each side blocks waiting on
@@ -203,12 +203,8 @@ static void core1_kmain(void)
   task_create(handshake_producer_task, 2048, TASK_PRIORITY_2, NULL, "hs_producer", &tcb);
   task_create(grind_task, 2048, TASK_PRIORITY_1, NULL, "grind1", &tcb);
 
-  // No cpsie here: p_task_control_block[core_id] isn't set until
-  // scheduler_switch_context() (inside scheduler_start()) runs — an IRQ
-  // landing before that NULL-derefs in cntx_switch$. Every task's saved SPSR
-  // already has IRQs enabled, so start_first_task()'s rfeia turns them on at
-  // the right moment on its own. See md/client/device/instrumentation.md's
-  // postmortem if this ever needs re-deriving.
+  // No cpsie here: IRQs must stay off until scheduler_start() sets
+  // p_task_control_block[core_id] — see md/client/device/instrumentation.md.
   scheduler_start();   // never returns
 }
 
@@ -228,17 +224,14 @@ static void core2_kmain(void)
   scheduler_start();   // never returns
 }
 
-// Core 3 — dedicated telemetry publisher. No RTOS-under-test tasks here on
-// purpose, so it can never be starved by (or starve) the demo running on
-// cores 0-2. See md/client/device/instrumentation.md's "Publisher task"
-// section.
+// Core 3 — dedicated telemetry publisher, no RTOS-under-test tasks (so it
+// can't be starved by, or starve, cores 0-2). See instrumentation.md.
 static void core3_kmain(void)
 {
   gic_percore_init();
   gentimer_init(&core3_clk_freq, hz);
-  // uart_telemetry_init() runs once, in core 0's kmain(), before this —
-  // every core's idle-task setup broadcasts over telemetry during
-  // scheduler_init(), so the UART must already be configured by then.
+  // uart_telemetry_init() (core 0's kmain()) must already have run — every
+  // core's idle-task setup broadcasts over telemetry during scheduler_init().
   scheduler_init(3U, &core3_clk_freq, hz, &core3_tick_count);
 
   TaskControlBlock *tcb;
@@ -255,9 +248,7 @@ void kmain(void)
   uart_init(UART_BAUDRATE_115200);
 
 #ifdef RTOS_TELEMETRY
-  // Must run before any core's scheduler_init() — every core's idle-task
-  // setup broadcasts over telemetry, which hangs if the UART isn't
-  // configured yet. See md/client/device/instrumentation.md's postmortem.
+  // Must run before any core's scheduler_init() — see instrumentation.md.
   uart_telemetry_init();
 #endif
 

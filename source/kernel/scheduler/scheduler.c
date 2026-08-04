@@ -126,9 +126,7 @@ StatusCode scheduler_init(uint32_t core_id, volatile uint32_t *p_clk_freq, uint3
   core->idle_tcb.state_list_item = (ListItem) { NULL, NULL, &core->idle_tcb, NULL };
   core->idle_tcb.event_list_item = (ListItem) { NULL, NULL, &core->idle_tcb, NULL };
 
-  // Idle never goes through task_create(), so it needs its own one-shot
-  // report. enter_critical() for the same reason as task.c's task_create()
-  // call — see its comment.
+  // Idle never goes through task_create(), so report its creation directly.
 #ifdef RTOS_TELEMETRY
   uint32_t telemetry_cpsr = enter_critical();
   telemetry_report_task_created(core->idle_tcb.task_id, core_id, (uint8_t)TASK_PRIORITY_IDLE, "idle");
@@ -271,9 +269,6 @@ void scheduler_switch_context(void)
       current->current_state = TASK_STATE_RUNNING;
       p_task_control_block[core_id] = current;
 #ifdef RTOS_TELEMETRY
-      // Cheap by design (lock, copy ~5 bytes, unlock) — see telemetry.h's doc
-      // comment. Never touches the UART itself, so this doesn't add UART
-      // transmission latency to the hot path, only the ring push.
       telemetry_report_tick_state(core_id, current->task_id, (uint8_t)current->current_state);
 #endif
       scheduler_unlock(core_id);

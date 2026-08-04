@@ -174,29 +174,18 @@ uint64_t uart_tx_get_byte_count(void);
 #endif
 
 #ifdef RTOS_TELEMETRY
-// ── Dedicated telemetry UART — UART3, separate PL011 instance from UART0/console.
-// See md/client/transport_protocol.md: kept off UART0 so telemetry framing never has
-// to resync around interleaved uart_print()/uart_printf() console traffic. Base
-// address and GPIO/ALT mapping confirmed against the BCM2711 ARM Peripherals datasheet
-// (datasheets.raspberrypi.com/bcm2711/bcm2711-peripherals.pdf) and
-// raspberrypi/linux's bcm2711.dtsi (uart3 node + uart3_pins pinctrl group).
+// Dedicated telemetry UART — UART3, separate PL011 instance from UART0/console.
+// See md/client/transport_protocol.md.
 #define TELEMETRY_UART_BASE        0xFE201600UL   // UART3 PL011
-#define TELEMETRY_UART_TX_PIN      4U             // GPIO4, ALT4 — TXD3 (RXD3 is GPIO5, unused: TX-only)
+#define TELEMETRY_UART_TX_PIN      4U             // GPIO4, ALT4 (TXD3)
 
-// 921600 baud @ UARTCLK 48 MHz: IBRD + FBRD/64 = 48e6 / (16*921600) = 3.2552...
-// Same derivation as UART_IBRD_115200/UART_FBRD_115200 above, cross-checked against
-// those known-good values.
-#define TELEMETRY_UART_IBRD_921600 3U
+#define TELEMETRY_UART_IBRD_921600 3U              // 921600 baud @ UARTCLK 48 MHz
 #define TELEMETRY_UART_FBRD_921600 16U
 
 #define TELEMETRY_UART             ((PL011Regs *)TELEMETRY_UART_BASE)
 
 /**
  * @brief Configure the dedicated telemetry UART (UART3, GPIO4, TX-only) at 921600 baud.
- * @note Separate PL011 instance from UART0 — no RX, no FIFO IRQ, no DMA, no ring
- * buffer. telemetry_publisher_task drains this directly with
- * uart_telemetry_tx_raw(), blocking, from its own dedicated core — see
- * md/client/transport_protocol.md's v1 scope-cut.
  */
 void uart_telemetry_init(void);
 
