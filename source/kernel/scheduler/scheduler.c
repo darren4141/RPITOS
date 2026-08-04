@@ -127,10 +127,12 @@ StatusCode scheduler_init(uint32_t core_id, volatile uint32_t *p_clk_freq, uint3
   core->idle_tcb.event_list_item = (ListItem) { NULL, NULL, &core->idle_tcb, NULL };
 
   // Idle never goes through task_create(), so it needs its own one-shot
-  // report — same telemetry_report_task_created() call, same "never stored
-  // in the TCB" rule (see md/client/device/instrumentation.md's postmortem).
+  // report. enter_critical() for the same reason as task.c's task_create()
+  // call — see its comment.
 #ifdef RTOS_TELEMETRY
+  uint32_t telemetry_cpsr = enter_critical();
   telemetry_report_task_created(core->idle_tcb.task_id, core_id, (uint8_t)TASK_PRIORITY_IDLE, "idle");
+  exit_critical(telemetry_cpsr);
 #endif
 
   TaskControlBlock *p_idle = &core->idle_tcb;
@@ -346,11 +348,6 @@ StatusCode scheduler_add_to_blocked_list(TaskControlBlock *tcb, uint64_t wakeup_
   }
 
   blocked_task_list->num_items++;
-
-#ifdef RTOS_TELEMETRY
-  telemetry_report_task_blocked(tcb->task_id, tcb->core_id);
-#endif
-
   return E_OK;
 }
 
@@ -386,10 +383,6 @@ StatusCode scheduler_remove_from_blocked_list(TaskControlBlock *tcb)
   item->next = NULL;
   item->prev = NULL;
   item->container = NULL;
-
-#ifdef RTOS_TELEMETRY
-  telemetry_report_task_unblocked(tcb->task_id, tcb->core_id);
-#endif
 
   return E_OK;
 }
@@ -447,6 +440,9 @@ static void block_until(uint64_t wakeup_time)
   scheduler_remove_from_ready_list(&p_task_control_block[core_id]);
   scheduler_add_to_blocked_list(p_task_control_block[core_id], wakeup_time);
   p_task_control_block[core_id]->current_state = TASK_STATE_BLOCKED;
+#ifdef RTOS_TELEMETRY
+  telemetry_report_task_blocked(p_task_control_block[core_id]->task_id, core_id);
+#endif
   scheduler_unlock(core_id);
   exit_critical(cpsr);
 
@@ -520,6 +516,9 @@ void __attribute__((noinline)) timer_tick_handler(void)
     }
 
     scheduler_add_to_ready_list(&tcb);
+#ifdef RTOS_TELEMETRY
+    telemetry_report_task_unblocked(tcb->task_id, tcb->core_id);
+#endif
   }
   scheduler_unlock(core_id);
 

@@ -10,23 +10,19 @@
 
 static uint8_t seq_counters[NUM_TELEMETRY_PACKET_TYPES] = { 0 };
 
-// Guards every packet type with genuinely concurrent multi-core callers:
-// telemetry_report_task_created(), telemetry_report_task_blocked(), and
-// telemetry_report_task_unblocked() — any of these can fire from whichever
-// core creates/blocks/unblocks a task, including cross-core wakes
-// (semaphore_give()/mutex_unlock() targeting a different core's task). Every
-// other packet type (PKT_HEARTBEAT, PKT_TICK_STATE) is sent exclusively by
-// the dedicated core-3 publisher — single-writer by design, so telemetry_send()
-// itself stays lock-free and those calls pay zero locking overhead, including
-// PKT_TICK_STATE at ~1 kHz. Zero-initialized by BSS, which is already this
-// lock's unlocked state (see spinlock_init()) — no explicit init call needed.
+// Guards every call into telemetry_send_framed(), from every entry point,
+// including telemetry_send() itself. Fixes a real hardware bug (a lost
+// dfu_reboot_task PKT_TASK_BLOCKED, corrupted by an unlocked core-3 send
+// racing a locked caller's send) — full story in
+// md/client/device/instrumentation.md's Third postmortem, including why this
+// doesn't risk a same-core IRQ deadlock despite being touched from both task
+// and IRQ context. Zero-initialized by BSS, already this lock's unlocked
+// state — no explicit init call needed.
 static Spinlock telemetry_lock;
 
-// Actual framing + CRC + UART write. No locking — callers decide whether
-// they need it. telemetry_send() (below) calls this directly, trusting the
-// caller to be the single dedicated telemetry core; telemetry_report_task_created()
-// wraps this in telemetry_lock instead, since task_create()/scheduler_init()
-// call it from whichever core creates a task.
+// Actual framing + CRC + UART write. Never call directly — every caller goes
+// through telemetry_send() or a telemetry_report_*() wrapper, all of which
+// hold telemetry_lock around this call.
 static void telemetry_send_framed(TelemetryPacketType type, const uint8_t *payload, uint8_t len)
 {
   uint8_t header[5];
@@ -65,7 +61,9 @@ void telemetry_send(TelemetryPacketType type, const uint8_t *payload, uint8_t le
     return;
   }
 
+  spinlock_acquire(&telemetry_lock);
   telemetry_send_framed(type, payload, len);
+  spinlock_release(&telemetry_lock);
 }
 
 void telemetry_report_task_created(uint16_t task_id, uint32_t core_id, uint8_t priority, const char *name)
@@ -83,9 +81,6 @@ void telemetry_report_task_created(uint16_t task_id, uint32_t core_id, uint8_t p
     name_len++;
   }
 
-  // Locked: this is the one call path with genuinely concurrent multi-core
-  // callers (any core, whenever it creates a task) — see telemetry_lock's
-  // doc comment above.
   spinlock_acquire(&telemetry_lock);
   telemetry_send_framed(PKT_TASK_CREATED, payload, (uint8_t)(4 + name_len));
   spinlock_release(&telemetry_lock);

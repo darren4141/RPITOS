@@ -1,4 +1,5 @@
 #include "companion_core.h"
+#include "interrupts.h"
 #include "task.h"
 #include "telemetry.h"
 #include "uart.h"
@@ -78,7 +79,16 @@ StatusCode task_create(TaskFunction task_function, uint16_t stack_depth, TaskPri
   task_counter[core_id]++;
 
 #ifdef RTOS_TELEMETRY
+  // enter_critical() here specifically: every other telemetry_lock-touching
+  // call site already runs with IRQs masked (their own enter_critical(), or
+  // IRQ context outright) — this is the one exception. Currently latent (no
+  // sample calls task_create() after scheduler_start(), so IRQs are always
+  // off here in practice), but a task created dynamically at runtime, with
+  // IRQs already on, would risk this core's own timer IRQ preempting the
+  // send mid-lock and deadlocking against telemetry_lock forever.
+  uint32_t telemetry_cpsr = enter_critical();
   telemetry_report_task_created((*p_task_control_block)->task_id, core_id, (uint8_t)priority, name);
+  exit_critical(telemetry_cpsr);
 #else
   (void)name;
 #endif

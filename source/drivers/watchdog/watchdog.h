@@ -100,13 +100,16 @@ void watchdog_disable(void);
  */
 void watchdog_trigger_reset(void);
 
-// Watchdog kick — kicks every 2 s via a periodic software timer (no dedicated
-// task). Requires watchdog_init() with a timeout > 2 s. Define
-// WATCHDOG_MINIMAL to exclude this (bootloader).
+// Watchdog kick — kicks every 2 s via a periodic software timer running on
+// the shared timer service task (cheap: one MMIO write). The confirm-slot
+// check is eMMC-heavy, so it's handed off to its own dedicated task instead
+// of running on that shared stack — see watchdog.c's note on the regression
+// that happens if this isolation is removed. Requires watchdog_init() with a
+// timeout > 2 s. Define WATCHDOG_MINIMAL to exclude this (bootloader).
 #ifndef WATCHDOG_MINIMAL
 
 /**
- * @brief Arm the periodic software timer that kicks the watchdog every WDT_KICK_PERIOD ms, plus the one-shot confirm-slot timer. Both run as callbacks on the shared software-timer service task — no dedicated task of their own.
+ * @brief Arm the periodic watchdog-kick software timer, plus the one-shot confirm-slot timer that hands off to a dedicated confirm task.
  */
 StatusCode watchdog_task_start(void);
 
