@@ -16,7 +16,8 @@ CFLAGS_BASE := -mcpu=cortex-a72 -marm -ffreestanding -nostdlib -O2 -Wall -g -pip
                $(patsubst %,-I%,$(wildcard source/drivers/*)) \
                $(patsubst %,-I%,$(wildcard source/kernel/*)) \
                $(patsubst %,-I%,$(wildcard source/boot/*)) \
-               $(patsubst %,-I%,$(wildcard source/libraries/*))
+               $(patsubst %,-I%,$(wildcard source/libraries/*)) \
+               -Isource/telemetry
 
 ifdef SAMPLE
 # ─────────────────────────────────────────────────────────────────────────────
@@ -33,8 +34,10 @@ SAMPLE_OBJ      := build/$(SAMPLE)/o
 #   SAMPLE_KERNEL          — component names under source/kernel/<name>/
 #   SAMPLE_BOOT_COMPONENTS — component names under source/boot/<name>/
 #   SAMPLE_LIBS            — component names under source/libraries/<name>/
+#   SAMPLE_TELEMETRY       — set to 1 to link source/telemetry/telemetry.c (gate the code itself with -DRTOS_TELEMETRY in SAMPLE_EXTRA_CFLAGS)
 #   SAMPLE_EXTRA_CFLAGS    — additional flags (optional, defaults to empty)
 SAMPLE_EXTRA_CFLAGS :=
+SAMPLE_TELEMETRY    :=
 include $(SAMPLE_DIR)/config.mk
 
 CFLAGS  := $(CFLAGS_BASE) $(SAMPLE_EXTRA_CFLAGS) -I$(SAMPLE_DIR)
@@ -51,6 +54,10 @@ SAMPLE_OBJECTS := \
   $(patsubst %,$(SAMPLE_OBJ)/%.o,$(SAMPLE_KERNEL)) \
   $(patsubst %,$(SAMPLE_OBJ)/%.o,$(SAMPLE_BOOT_COMPONENTS)) \
   $(patsubst %,$(SAMPLE_OBJ)/%.o,$(SAMPLE_LIBS))
+
+ifeq ($(SAMPLE_TELEMETRY),1)
+SAMPLE_OBJECTS += $(SAMPLE_OBJ)/telemetry.o
+endif
 
 # ── Targets ──────────────────────────────────────────────────────────────────
 .PHONY: all
@@ -91,6 +98,10 @@ $(foreach d,$(SAMPLE_DRIVERS),       $(eval $(call COMPILE_RULE,$d,source/driver
 $(foreach d,$(SAMPLE_KERNEL),        $(eval $(call COMPILE_RULE,$d,source/kernel)))
 $(foreach d,$(SAMPLE_BOOT_COMPONENTS),$(eval $(call COMPILE_RULE,$d,source/boot)))
 $(foreach d,$(SAMPLE_LIBS),          $(eval $(call COMPILE_RULE,$d,source/libraries)))
+
+# telemetry.c lives flat under source/telemetry/ (not nested per-component like the libraries above)
+$(SAMPLE_OBJ)/telemetry.o: source/telemetry/telemetry.c | $(SAMPLE_OBJ)
+	$(ARMGNU)-gcc $(CFLAGS) -c $< -o $@
 
 $(SAMPLE_OUT):
 	mkdir -p $@

@@ -11,3 +11,13 @@ task's own state, never another task's TCB.
 (`[R0-R12][LR][PC][SPSR]`) so that `start_first_task()`/the context-switch
 path in `startup.s` can `pop`+`rfeia` a never-yet-run task exactly the same
 way it resumes a previously-preempted one — see `scheduler/docs.md`.
+
+## `name` param (`RTOS_TELEMETRY` builds only)
+
+`task_create()` takes a `const char *name`, used only to send a one-shot
+`PKT_TASK_CREATED` telemetry report at creation time — never stored in
+`TaskControlBlock` (storing it there previously caused a hardware
+crash-loop; see `md/client/device/instrumentation.md`). In non-telemetry
+builds the param is unused. This is the one `telemetry_lock`-touching call
+site not already guaranteed to run with IRQs masked, so it wraps the report
+in its own `enter_critical()`/`exit_critical()` — see `telemetry/docs.md`.

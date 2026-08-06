@@ -12,6 +12,7 @@
 #include "semaphore.h"
 #include "software_timer.h"
 #include "task.h"
+#include "telemetry.h"
 #include "uart.h"
 #include "watchdog.h"
 
@@ -24,13 +25,21 @@ static Mutex g_counter_mutex;      // contended by one task on every core
 static volatile uint32_t g_shared_counter = 0;
 
 static Semaphore g_ping_sem;       // core 0 gives, core 1 takes
-static Queue g_msg_queue;          // core 2 sends, core 3 receives
+static Queue g_msg_queue;          // core 2 sends, core 0 receives
+
+// Round-trip producer/consumer handshake between core 1 and core 2 — unlike
+// g_ping_sem (one-directional, fire-and-forget), each side blocks waiting on
+// the other every cycle. See handshake_producer_task()/handshake_consumer_task().
+static Semaphore g_data_ready_sem;       // core 1 gives once data's "produced", core 2 takes
+static Semaphore g_processing_done_sem;  // core 2 gives once "processed", core 1 takes
 
 // ── Core 0
 static volatile uint32_t clk_freq;
 static volatile uint64_t tick_count = 0;
 static TaskControlBlock *tcb_mutex0 = NULL;
 static TaskControlBlock *tcb_ping = NULL;
+static TaskControlBlock *tcb_queue_recv = NULL;
+static TaskControlBlock *tcb_grind0 = NULL;
 
 // ── Core 1
 static volatile uint32_t core1_clk_freq;
@@ -40,15 +49,29 @@ static volatile uint64_t core1_tick_count = 0;
 static volatile uint32_t core2_clk_freq;
 static volatile uint64_t core2_tick_count = 0;
 
-// ── Core 3
+// ── Core 3 — dedicated telemetry publisher, no app tasks (see core3_kmain)
 static volatile uint32_t core3_clk_freq;
 static volatile uint64_t core3_tick_count = 0;
+
+// Busy-spins the calling task for roughly ms milliseconds — real RUNNING
+// time (shows up as such in telemetry), not a blocking delay. Used to make
+// contention/idle-time visible on the dashboard instead of everything
+// finishing near-instantly.
+static void busy_work_ms(uint64_t ms)
+{
+  uint64_t start = scheduler_get_tick_count();
+  volatile uint32_t churn = 0;
+  while ((scheduler_get_tick_count() - start) < ms) {
+    churn++;
+  }
+}
 
 // One task, run identically on all four cores — reads its own core id at
 // runtime rather than being copy-pasted per core. Demonstrates mutex_lock()/
 // mutex_unlock() genuinely serializing a shared resource across four
-// independent per-core schedulers: the printed sequence should show every
-// value exactly once, in order, regardless of which core produced it.
+// independent per-core schedulers. Holds the mutex for a visible ~30 ms
+// (busy_work_ms, not a delay) so waiters on other cores block for a real,
+// observable duration.
 static void mutex_counter_task(void *params)
 {
   (void)params;
@@ -57,8 +80,21 @@ static void mutex_counter_task(void *params)
     mutex_lock(&g_counter_mutex, -1);
     g_shared_counter++;
     uart_printf("core %u: shared counter now %u\r\n", my_core, g_shared_counter);
+    busy_work_ms(30U);
     mutex_unlock(&g_counter_mutex);
     task_delay_ms(300U);
+  }
+}
+
+// CPU-bound filler task, one per app core (0-2) — keeps the core genuinely
+// busy between the lighter-weight demo tasks' delays. Lowest app priority so
+// it never delays ping/pong/queue traffic.
+static void grind_task(void *params)
+{
+  (void)params;
+  while (1) {
+    busy_work_ms(50U);
+    task_delay_ms(15U);
   }
 }
 
@@ -88,6 +124,41 @@ static void pong_task(void *params)
   }
 }
 
+// Core 1 — "produces data" (busy work; content doesn't matter), hands it off,
+// then blocks waiting for core 2 to finish "processing" before producing
+// again. Strict alternation with handshake_consumer_task() — while one side
+// works, the other is blocked, every cycle.
+static void handshake_producer_task(void *params)
+{
+  (void)params;
+  uint32_t batch = 0;
+  while (1) {
+    busy_work_ms(700U);   // "producing"
+    uart_printf("core 1: produced batch %u, handing off\r\n", batch);
+    semaphore_give(&g_data_ready_sem);
+
+    semaphore_take(&g_processing_done_sem, SEMAPHORE_TAKE_BLOCKING);
+    uart_printf("core 1: batch %u acked, producing next\r\n", batch);
+    batch++;
+  }
+}
+
+// Core 2 — blocks waiting for core 1's data, "processes" it (busy work,
+// deliberately longer than the producer's), then hands the ack back.
+static void handshake_consumer_task(void *params)
+{
+  (void)params;
+  uint32_t batch = 0;
+  while (1) {
+    semaphore_take(&g_data_ready_sem, SEMAPHORE_TAKE_BLOCKING);
+    uart_printf("core 2: processing batch %u\r\n", batch);
+    busy_work_ms(1800U);   // "processing"
+    uart_printf("core 2: batch %u done\r\n", batch);
+    semaphore_give(&g_processing_done_sem);
+    batch++;
+  }
+}
+
 // Core 2 — queue producer side.
 static void queue_send_task(void *params)
 {
@@ -101,20 +172,21 @@ static void queue_send_task(void *params)
     else {
       uart_print("core 2: queue full, send timed out\r\n");
     }
-    task_delay_ms(400U);
+    task_delay_ms(150U);
   }
 }
 
-// Core 3 — queue consumer side. Blocks until core 2's queue_send_task sends —
+// Core 0 — queue consumer side. Blocks until core 2's queue_send_task sends —
 // demonstrates queue_recv() correctly waking a task on a different core than
-// the one that called queue_send().
+// the one that called queue_send(). (Runs on core 0, not core 3 — core 3 is
+// dedicated to telemetry, see core3_kmain.)
 static void queue_recv_task(void *params)
 {
   (void)params;
   uint32_t msg;
   while (1) {
     if (queue_recv(&g_msg_queue, &msg, SEMAPHORE_TAKE_BLOCKING) == E_OK) {
-      uart_printf("core 3: received msg %u\r\n", msg);
+      uart_printf("core 0: received msg %u\r\n", msg);
     }
   }
 }
@@ -126,11 +198,14 @@ static void core1_kmain(void)
   scheduler_init(1U, &core1_clk_freq, hz, &core1_tick_count);
 
   TaskControlBlock *tcb;
-  task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, &tcb);
-  task_create(pong_task, 2048, TASK_PRIORITY_2, NULL, &tcb);
+  task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, "mutex_ctr1", &tcb);
+  task_create(pong_task, 2048, TASK_PRIORITY_2, NULL, "pong", &tcb);
+  task_create(handshake_producer_task, 2048, TASK_PRIORITY_2, NULL, "hs_producer", &tcb);
+  task_create(grind_task, 2048, TASK_PRIORITY_1, NULL, "grind1", &tcb);
 
-  __asm__ volatile ("cpsie i" ::: "memory");
-  scheduler_start();     // never returns
+  // No cpsie here: IRQs must stay off until scheduler_start() sets
+  // p_task_control_block[core_id] — see md/client/device/instrumentation.md.
+  scheduler_start();   // never returns
 }
 
 static void core2_kmain(void)
@@ -140,25 +215,30 @@ static void core2_kmain(void)
   scheduler_init(2U, &core2_clk_freq, hz, &core2_tick_count);
 
   TaskControlBlock *tcb;
-  task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, &tcb);
-  task_create(queue_send_task, 2048, TASK_PRIORITY_2, NULL, &tcb);
+  task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, "mutex_ctr2", &tcb);
+  task_create(queue_send_task, 2048, TASK_PRIORITY_2, NULL, "queue_send", &tcb);
+  task_create(handshake_consumer_task, 2048, TASK_PRIORITY_2, NULL, "hs_consumer", &tcb);
+  task_create(grind_task, 2048, TASK_PRIORITY_1, NULL, "grind2", &tcb);
 
-  __asm__ volatile ("cpsie i" ::: "memory");
-  scheduler_start();     // never returns
+  // No cpsie here — see core1_kmain().
+  scheduler_start();   // never returns
 }
 
+// Core 3 — dedicated telemetry publisher, no RTOS-under-test tasks (so it
+// can't be starved by, or starve, cores 0-2). See instrumentation.md.
 static void core3_kmain(void)
 {
   gic_percore_init();
   gentimer_init(&core3_clk_freq, hz);
+  // uart_telemetry_init() (core 0's kmain()) must already have run — every
+  // core's idle-task setup broadcasts over telemetry during scheduler_init().
   scheduler_init(3U, &core3_clk_freq, hz, &core3_tick_count);
 
   TaskControlBlock *tcb;
-  task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, &tcb);
-  task_create(queue_recv_task, 2048, TASK_PRIORITY_2, NULL, &tcb);
+  task_create(telemetry_publisher_task, 2048, TASK_PRIORITY_1, NULL, "telemetry_pub", &tcb);
 
-  __asm__ volatile ("cpsie i" ::: "memory");
-  scheduler_start();     // never returns
+  // No cpsie here — see core1_kmain().
+  scheduler_start();   // never returns
 }
 
 void kmain(void)
@@ -166,11 +246,17 @@ void kmain(void)
   jtag_gpio_init();
 
   uart_init(UART_BAUDRATE_115200);
+
+#ifdef RTOS_TELEMETRY
+  // Must run before any core's scheduler_init() — see instrumentation.md.
+  uart_telemetry_init();
+#endif
+
   uart_print("\r\n=== multicore_full_demo ===\r\n"
-             "core 0: RTOS — mutex counter + semaphore ping\r\n"
+             "core 0: RTOS — mutex counter + semaphore ping + queue receiver\r\n"
              "core 1: RTOS — mutex counter + semaphore pong\r\n"
              "core 2: RTOS — mutex counter + queue sender\r\n"
-             "core 3: RTOS — mutex counter + queue receiver\r\n\r\n");
+             "core 3: telemetry publisher (dedicated, no app tasks)\r\n\r\n");
 
   watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 1);
 
@@ -182,19 +268,20 @@ void kmain(void)
 
   mutex_init(&g_counter_mutex);
   semaphore_init(&g_ping_sem, 1, 0);
+  semaphore_init(&g_data_ready_sem, 1, 0);
+  semaphore_init(&g_processing_done_sem, 1, 0);
   queue_init(&g_msg_queue, 4, sizeof(uint32_t));
 
-  task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, &tcb_mutex0);
-  task_create(ping_task, 2048, TASK_PRIORITY_2, NULL, &tcb_ping);
+  task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, "mutex_ctr0", &tcb_mutex0);
+  task_create(ping_task, 2048, TASK_PRIORITY_2, NULL, "ping", &tcb_ping);
+  task_create(queue_recv_task, 2048, TASK_PRIORITY_2, NULL, "queue_recv", &tcb_queue_recv);
+  task_create(grind_task, 2048, TASK_PRIORITY_1, NULL, "grind0", &tcb_grind0);
 
   watchdog_task_start();
 
   gic_distributor_init();   // global — must happen before any core is released
   gic_percore_init();       // core 0's own PPI30 + CPU-interface enable
   gentimer_init(&clk_freq, hz);
-
-  // DFU recovery is wired up automatically now (scheduler_init() + uart_task_start()) —
-  // no per-app call needed. See dfu_trigger.h.
 
   // A/B trial boot: confirm this app slot now that init succeeded.
   wdt_meta_confirm_slot();
@@ -225,7 +312,6 @@ void kmain(void)
     uart_print("core 0: companion_core_start(3) failed\r\n");
   }
 
-  __asm__ volatile ("cpsie i" ::: "memory");
-
+  // No cpsie here — see core1_kmain().
   scheduler_start();
 }

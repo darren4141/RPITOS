@@ -4,6 +4,7 @@
 
 #include "interrupts.h"
 #include "scheduler.h"
+#include "telemetry.h"
 
 void mutex_init(Mutex *mtx)
 {
@@ -86,6 +87,9 @@ StatusCode mutex_lock(Mutex *mtx, int64_t timeout_ms)
     scheduler_add_to_blocked_list(cur_tcb, scheduler_get_tick_count() + (uint64_t)timeout_ms);
   }
   cur_tcb->current_state = TASK_STATE_BLOCKED;
+#ifdef RTOS_TELEMETRY
+  telemetry_report_task_blocked(cur_tcb->task_id, cur_tcb->core_id);
+#endif
   scheduler_unlock(cur_tcb->core_id);
 
   // Priority inheritance: if we're higher priority than all current waiters,
@@ -217,6 +221,9 @@ void mutex_unlock(Mutex *mtx)
     }
     scheduler_remove_from_blocked_list(next_owner);
     scheduler_add_to_ready_list(&next_owner);
+#ifdef RTOS_TELEMETRY
+    telemetry_report_task_unblocked(next_owner->task_id, next_owner->core_id);
+#endif
     scheduler_unlock(next_owner->core_id);
   }
 

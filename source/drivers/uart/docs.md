@@ -41,3 +41,17 @@ If `UART_DMA_TX_CHANNEL` or `UART_IRQ_INTID` change, the matching
 `cmp r2, #<intid>` dispatch lines in `startup/startup.s` must be updated to
 match (INTID = 112 + channel for DMA; 153 is the PL011 combined IRQ on
 BCM2711).
+
+## Telemetry UART (`RTOS_TELEMETRY` builds only)
+
+A second, dedicated PL011 instance — UART3 (`0xFE201600`), TXD3 on GPIO4
+(`ALT4`), TX-only (RXD3/GPIO5 left unconfigured). Kept separate from UART0 so
+telemetry framing never has to resync around interleaved `uart_print()`/
+`uart_printf()` console traffic — see `md/client/transport_protocol.md`.
+
+`uart_telemetry_init()` configures it for 921600 baud (`IBRD=3, FBRD=16` at
+the same `UARTCLK = 48 MHz` reference as `UART_IBRD_115200`/`UART_FBRD_115200`
+above). `uart_telemetry_tx_raw()` is a raw, blocking single-byte write — no
+ring buffer, no DMA, no TX task, unlike the full-mode UART0 path. Acceptable
+because the only caller, `telemetry_publisher_task`, runs alone on a
+dedicated core (see `telemetry/docs.md`).

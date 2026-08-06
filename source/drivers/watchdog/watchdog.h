@@ -105,7 +105,7 @@ void watchdog_trigger_reset(void);
 #ifndef WATCHDOG_MINIMAL
 
 /**
- * @brief Start the background task that kicks the watchdog every WDT_KICK_PERIOD ms.
+ * @brief Arm the periodic watchdog-kick timer and the confirm-slot timer/task.
  */
 StatusCode watchdog_task_start(void);
 

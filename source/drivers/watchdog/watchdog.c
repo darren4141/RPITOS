@@ -227,7 +227,7 @@ StatusCode watchdog_task_start(void)
 
     semaphore_init(&s_confirm_semaphore, 1U, 0U);
 
-    ret = task_create(watchdog_confirm_task, 512, TASK_PRIORITY_1, NULL, &s_watchdog_confirm_tcb);
+    ret = task_create(watchdog_confirm_task, 512, TASK_PRIORITY_1, NULL, "wdt_confirm", &s_watchdog_confirm_tcb);
     if (ret != E_OK) {
       return ret;
     }

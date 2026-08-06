@@ -6,6 +6,7 @@
 #include "dfu_trigger.h"
 #include "interrupts.h"
 #include "spinlock.h"
+#include "telemetry.h"
 #include "uart.h"
 
 #define IDLE_STACK_DEPTH 64
@@ -124,6 +125,13 @@ StatusCode scheduler_init(uint32_t core_id, volatile uint32_t *p_clk_freq, uint3
   core->idle_tcb.wakeup_reason = WAKEUP_REASON_NONE;
   core->idle_tcb.state_list_item = (ListItem) { NULL, NULL, &core->idle_tcb, NULL };
   core->idle_tcb.event_list_item = (ListItem) { NULL, NULL, &core->idle_tcb, NULL };
+
+  // Idle never goes through task_create(), so report its creation directly.
+#ifdef RTOS_TELEMETRY
+  uint32_t telemetry_cpsr = enter_critical();
+  telemetry_report_task_created(core->idle_tcb.task_id, core_id, (uint8_t)TASK_PRIORITY_IDLE, "idle");
+  exit_critical(telemetry_cpsr);
+#endif
 
   TaskControlBlock *p_idle = &core->idle_tcb;
   scheduler_lock(core_id);
@@ -260,6 +268,9 @@ void scheduler_switch_context(void)
       current = core->ready_list[i].index->owner;
       current->current_state = TASK_STATE_RUNNING;
       p_task_control_block[core_id] = current;
+#ifdef RTOS_TELEMETRY
+      telemetry_report_tick_state(core_id, current->task_id, (uint8_t)current->current_state);
+#endif
       scheduler_unlock(core_id);
       return;
     }
@@ -424,6 +435,9 @@ static void block_until(uint64_t wakeup_time)
   scheduler_remove_from_ready_list(&p_task_control_block[core_id]);
   scheduler_add_to_blocked_list(p_task_control_block[core_id], wakeup_time);
   p_task_control_block[core_id]->current_state = TASK_STATE_BLOCKED;
+#ifdef RTOS_TELEMETRY
+  telemetry_report_task_blocked(p_task_control_block[core_id]->task_id, core_id);
+#endif
   scheduler_unlock(core_id);
   exit_critical(cpsr);
 
@@ -497,6 +511,9 @@ void __attribute__((noinline)) timer_tick_handler(void)
     }
 
     scheduler_add_to_ready_list(&tcb);
+#ifdef RTOS_TELEMETRY
+    telemetry_report_task_unblocked(tcb->task_id, tcb->core_id);
+#endif
   }
   scheduler_unlock(core_id);
 

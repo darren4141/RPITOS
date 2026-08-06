@@ -104,9 +104,9 @@ void kmain(void)
   scheduler_init(0, &clk_freq, hz, &tick_count);
   uart_task_start();
 
-  task_create(low_task, 2048, TASK_PRIORITY_1, NULL, &tcb_low);
-  task_create(mid_task, 2048, TASK_PRIORITY_2, NULL, &tcb_mid);
-  task_create(high_task, 2048, TASK_PRIORITY_3, NULL, &tcb_high);
+  task_create(low_task, 2048, TASK_PRIORITY_1, NULL, "low", &tcb_low);
+  task_create(mid_task, 2048, TASK_PRIORITY_2, NULL, "mid", &tcb_mid);
+  task_create(high_task, 2048, TASK_PRIORITY_3, NULL, "high", &tcb_high);
 
   software_timer_init();
   software_timer_start();

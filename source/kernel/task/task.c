@@ -1,5 +1,7 @@
-#include "task.h"
 #include "companion_core.h"
+#include "interrupts.h"
+#include "task.h"
+#include "telemetry.h"
 #include "uart.h"
 
 #include <stddef.h>
@@ -48,7 +50,7 @@ static void task_exit_trap(void)
   }
 }
 
-StatusCode task_create(TaskFunction task_function, uint16_t stack_depth, TaskPriorityLevel priority, void *task_params, TaskControlBlock **p_task_control_block)
+StatusCode task_create(TaskFunction task_function, uint16_t stack_depth, TaskPriorityLevel priority, void *task_params, const char *name, TaskControlBlock **p_task_control_block)
 {
   uint32_t core_id = companion_core_id();
 
@@ -75,6 +77,16 @@ StatusCode task_create(TaskFunction task_function, uint16_t stack_depth, TaskPri
   (*p_task_control_block)->task_id = task_counter[core_id];
   (*p_task_control_block)->core_id = core_id;
   task_counter[core_id]++;
+
+#ifdef RTOS_TELEMETRY
+  // Mask IRQs around the telemetry_lock-guarded send — see
+  // md/client/device/instrumentation.md for why this call site needs it.
+  uint32_t telemetry_cpsr = enter_critical();
+  telemetry_report_task_created((*p_task_control_block)->task_id, core_id, (uint8_t)priority, name);
+  exit_critical(telemetry_cpsr);
+#else
+  (void)name;
+#endif
 
   (*p_task_control_block)->priority = priority;
   (*p_task_control_block)->base_priority = priority;

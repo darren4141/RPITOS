@@ -173,8 +173,8 @@ void kmain(void)
   software_timer_init();
   software_timer_start();
 
-  task_create(demo_task, 2048, TASK_PRIORITY_1, NULL, &tcb_demo);
-  task_create(spawner_task, 2048, TASK_PRIORITY_2, NULL, &tcb_spawner);
+  task_create(demo_task, 2048, TASK_PRIORITY_1, NULL, "demo", &tcb_demo);
+  task_create(spawner_task, 2048, TASK_PRIORITY_2, NULL, "spawner", &tcb_spawner);
 
   watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
   watchdog_task_start();

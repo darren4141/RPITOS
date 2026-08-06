@@ -173,6 +173,28 @@ uint64_t uart_tx_get_byte_count(void);
 #endif
 #endif
 
+#ifdef RTOS_TELEMETRY
+// Dedicated telemetry UART — UART3, separate PL011 instance from UART0/console.
+// See md/client/transport_protocol.md.
+#define TELEMETRY_UART_BASE        0xFE201600UL   // UART3 PL011
+#define TELEMETRY_UART_TX_PIN      4U             // GPIO4, ALT4 (TXD3)
+
+#define TELEMETRY_UART_IBRD_921600 3U              // 921600 baud @ UARTCLK 48 MHz
+#define TELEMETRY_UART_FBRD_921600 16U
+
+#define TELEMETRY_UART             ((PL011Regs *)TELEMETRY_UART_BASE)
+
+/**
+ * @brief Configure the dedicated telemetry UART (UART3, GPIO4, TX-only) at 921600 baud.
+ */
+void uart_telemetry_init(void);
+
+/**
+ * @brief Transmit a single raw byte on the dedicated telemetry UART, blocking until its TX FIFO has room.
+ */
+void uart_telemetry_tx_raw(uint8_t byte);
+#endif // RTOS_TELEMETRY
+
 /**
  * @brief Read one byte, blocking until the RX FIFO is non-empty.
  */

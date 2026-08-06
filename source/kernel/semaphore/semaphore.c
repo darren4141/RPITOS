@@ -4,6 +4,7 @@
 
 #include "interrupts.h"
 #include "scheduler.h"
+#include "telemetry.h"
 #include "uart.h"
 
 static void semaphore_add_to_blocked_list(Semaphore *smph, TaskControlBlock *tcb)
@@ -78,6 +79,9 @@ StatusCode semaphore_take(Semaphore *smph, int64_t timeout_ms)
     scheduler_unlock(core_id);
 
     cur_tcb->current_state = TASK_STATE_BLOCKED;
+#ifdef RTOS_TELEMETRY
+    telemetry_report_task_blocked(cur_tcb->task_id, core_id);
+#endif
     spinlock_release(&smph->lock);
     exit_critical(cpsr);
 
@@ -123,6 +127,9 @@ StatusCode semaphore_give(Semaphore *smph)
     p_next_tcb->event_list_item.container = NULL;
     p_next_tcb->wakeup_reason = WAKEUP_REASON_RESOURCE_ACQUIRED;
     scheduler_add_to_ready_list(&p_next_tcb);
+#ifdef RTOS_TELEMETRY
+    telemetry_report_task_unblocked(p_next_tcb->task_id, core_id);
+#endif
     scheduler_unlock(core_id);
   }
   else {

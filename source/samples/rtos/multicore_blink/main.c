@@ -95,11 +95,11 @@ static void core1_kmain(void)
   uart_tx_raw('[');uart_tx_raw('G');uart_tx_raw('3');uart_tx_raw(']'); // DEBUG: scheduler_init done
 
   TaskControlBlock *tcb;
-  task_create(led16_task, 2048, TASK_PRIORITY_1, NULL, &tcb);
+  task_create(led16_task, 2048, TASK_PRIORITY_1, NULL, "led16", &tcb);
   uart_tx_raw('[');uart_tx_raw('T');uart_tx_raw('1');uart_tx_raw(']'); // DEBUG: task16 created
-  task_create(led20_task, 2048, TASK_PRIORITY_1, NULL, &tcb);
+  task_create(led20_task, 2048, TASK_PRIORITY_1, NULL, "led20", &tcb);
   uart_tx_raw('[');uart_tx_raw('T');uart_tx_raw('2');uart_tx_raw(']'); // DEBUG: task20 created
-  task_create(led21_task, 2048, TASK_PRIORITY_1, NULL, &tcb);
+  task_create(led21_task, 2048, TASK_PRIORITY_1, NULL, "led21", &tcb);
   uart_tx_raw('[');uart_tx_raw('T');uart_tx_raw('3');uart_tx_raw(']'); // DEBUG: task21 created
 
   uart_tx_raw('[');uart_tx_raw('R');uart_tx_raw('2');uart_tx_raw(']'); // DEBUG: tasks created, about to start scheduler
@@ -151,8 +151,8 @@ void kmain(void)
   software_timer_init();
   software_timer_start();
 
-  task_create(core0_uart_task, 2048, TASK_PRIORITY_1, NULL, &tcb_uart);
-  task_create(core0_uart_task2, 2048, TASK_PRIORITY_1, NULL, &tcb_uart2);
+  task_create(core0_uart_task, 2048, TASK_PRIORITY_1, NULL, "uart_a", &tcb_uart);
+  task_create(core0_uart_task2, 2048, TASK_PRIORITY_1, NULL, "uart_b", &tcb_uart2);
 
   watchdog_task_start();
 

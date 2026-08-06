@@ -61,7 +61,7 @@ StatusCode dfu_trigger_task_start(void)
 {
   dfu_trigger_reset();
   semaphore_init(&dfu_semaphore, 1, 0);
-  return task_create(dfu_reboot_task, 1024, TASK_PRIORITY_5, NULL, &dfu_tcb);
+  return task_create(dfu_reboot_task, 1024, TASK_PRIORITY_5, NULL, "dfu_reboot", &dfu_tcb);
 }
 
 #endif
