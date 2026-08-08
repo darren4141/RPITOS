@@ -225,7 +225,7 @@ StatusCode watchdog_task_start(void)
   if (s_confirm_delay_ms >= 0) {
     uint64_t delay = (s_confirm_delay_ms > 0) ? (uint64_t)s_confirm_delay_ms : 1U;
 
-    semaphore_init(&s_confirm_semaphore, 1U, 0U);
+    semaphore_init(&s_confirm_semaphore, 1U, 0U, "wdt_confirm_sem");
 
     ret = task_create(watchdog_confirm_task, 512, TASK_PRIORITY_1, NULL, "wdt_confirm", &s_watchdog_confirm_tcb);
     if (ret != E_OK) {

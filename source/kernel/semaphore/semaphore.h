@@ -19,12 +19,28 @@ struct Semaphore {
   // different cores' schedulers), so it carries its own lock rather than
   // relying on any core's scheduler lock. See spinlock/docs.md.
   Spinlock lock;
+#ifdef RTOS_TELEMETRY
+  // See Mutex::sync_id (mutex.h) — same pattern, field absent entirely outside
+  // telemetry builds. Also used for a queue's two internal semaphores
+  // (queue_init()), each with their own sync_id and a parent_sync_id back to
+  // the queue — see md/client/device/sync_view.md.
+  uint16_t sync_id;
+#endif
 };
 
 /**
  * @brief Initialize a counting semaphore with the given max and starting count.
+ * @param name Only used (broadcast once, never stored) when built with RTOS_TELEMETRY; pass NULL or a literal freely either way.
  */
-void semaphore_init(Semaphore *smph, uint32_t max_count, uint32_t initial_count);
+void semaphore_init(Semaphore *smph, uint32_t max_count, uint32_t initial_count, const char *name);
+
+#ifdef RTOS_TELEMETRY
+/**
+ * @brief Same as semaphore_init(), plus a parent_sync_id link. Queue-internal use only (queue_init()) — every other caller wants the public semaphore_init() above.
+ */
+void semaphore_init_with_parent(Semaphore *smph, uint32_t max_count, uint32_t initial_count, const char *name,
+                                 uint16_t parent_sync_id);
+#endif
 
 /**
  * @brief Take one count, blocking up to timeout_ms if none are available.

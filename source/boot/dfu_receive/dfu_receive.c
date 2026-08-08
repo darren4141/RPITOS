@@ -7,6 +7,7 @@
 #include "crc.h"
 #include "dfu_trigger.h"
 #include "emmc.h"
+#include "telemetry.h"
 #include "uart.h"
 #include "watchdog.h"
 
@@ -22,6 +23,16 @@ static bool unwritten_sector;
 static bool started;
 static bool is_self_update;
 static uint32_t dfu_base_sector;   // header sector of the slot being written
+
+#ifdef RTOS_TELEMETRY
+// Which image this session is writing — DFU_TARGET_UNKNOWN until CMD_START/
+// _SELF_UPDATE pins it, then held for the rest of the session (including
+// telemetry_report_dfu_event(DFU_EVT_ABORTED, ...) calls after that point).
+static uint8_t dfu_telemetry_target;
+// Last percent-of-img_length boundary a DFU_EVT_DATA_PROGRESS was sent at —
+// see the throttling note on telemetry_report_dfu_event() call sites below.
+static uint32_t dfu_telemetry_last_pct;
+#endif
 
 // Helper function to receive one dfu packet at a time and pack it into a struct. also returns timeout error code
 static StatusCode dfu_packet_receive(DFU_Packet *packet)
@@ -115,6 +126,10 @@ StatusCode dfu_init()
   started = false;
   is_self_update = false;
   dfu_base_sector = 0;
+#ifdef RTOS_TELEMETRY
+  dfu_telemetry_target = DFU_TARGET_UNKNOWN;
+  dfu_telemetry_last_pct = 0;
+#endif
 
   return E_OK;
 }
@@ -124,12 +139,19 @@ StatusCode dfu_receive()
   dfu_init();
   dfu_trigger_reset();
 
+#ifdef RTOS_TELEMETRY
+  telemetry_report_dfu_event(DFU_EVT_WAITING_TRIGGER, DFU_TARGET_UNKNOWN, 0);
+#endif
+
   // Wait for the DFU trigger key
   while (1) {
     uint8_t byte = uart_rx();
     if (dfu_trigger_feed(byte)) {
       uart_tx_raw(DFU_ACK);
       dfu_trigger_reset();
+#ifdef RTOS_TELEMETRY
+      telemetry_report_dfu_event(DFU_EVT_TRIGGER_MATCHED, DFU_TARGET_UNKNOWN, 0);
+#endif
       break;
     }
   }
@@ -147,6 +169,9 @@ StatusCode dfu_receive()
       // Timed out mid-transfer. We were writing the *inactive* slot, so the
       // active slot is untouched - just abandon without committing the flip.
       uart_print("DFU: session timed out\r\n");
+#ifdef RTOS_TELEMETRY
+      telemetry_report_dfu_event(DFU_EVT_ABORTED, dfu_telemetry_target, DFU_ABORT_TIMEOUT);
+#endif
       return E_TIMED_OUT;
     }
     switch (packet.CMD) {
@@ -159,6 +184,9 @@ StatusCode dfu_receive()
         if (packet.LEN != sizeof(StartPacket)) {
           uart_tx_raw(DFU_NACK);
           state = DFU_STATE_ABORT;
+#ifdef RTOS_TELEMETRY
+          telemetry_report_dfu_event(DFU_EVT_ABORTED, DFU_TARGET_UNKNOWN, DFU_ABORT_BAD_START_LEN);
+#endif
           break;
         }
         state = DFU_STATE_RECIEVE_DATA;
@@ -179,11 +207,18 @@ StatusCode dfu_receive()
 
         is_self_update = false;
         started = true;
+#ifdef RTOS_TELEMETRY
+        dfu_telemetry_target = DFU_TARGET_APP;
+        telemetry_report_dfu_event(DFU_EVT_START_RECEIVED, DFU_TARGET_APP, img_length);
+#endif
         uart_tx_raw(DFU_ACK);
       }
       else {
         uart_tx_raw(DFU_NACK);
         state = DFU_STATE_ABORT;
+#ifdef RTOS_TELEMETRY
+        telemetry_report_dfu_event(DFU_EVT_ABORTED, dfu_telemetry_target, DFU_ABORT_ALREADY_STARTED);
+#endif
       }
       break;
 
@@ -192,6 +227,9 @@ StatusCode dfu_receive()
         if (packet.LEN != sizeof(StartPacket)) {
           uart_tx_raw(DFU_NACK);
           state = DFU_STATE_ABORT;
+#ifdef RTOS_TELEMETRY
+          telemetry_report_dfu_event(DFU_EVT_ABORTED, DFU_TARGET_UNKNOWN, DFU_ABORT_BAD_START_LEN);
+#endif
           break;
         }
         state = DFU_STATE_RECIEVE_DATA;
@@ -210,11 +248,18 @@ StatusCode dfu_receive()
 
         is_self_update = true;
         started = true;
+#ifdef RTOS_TELEMETRY
+        dfu_telemetry_target = DFU_TARGET_BOOTLOADER;
+        telemetry_report_dfu_event(DFU_EVT_START_RECEIVED, DFU_TARGET_BOOTLOADER, img_length);
+#endif
         uart_tx_raw(DFU_ACK);
       }
       else {
         uart_tx_raw(DFU_NACK);
         state = DFU_STATE_ABORT;
+#ifdef RTOS_TELEMETRY
+        telemetry_report_dfu_event(DFU_EVT_ABORTED, dfu_telemetry_target, DFU_ABORT_ALREADY_STARTED);
+#endif
       }
       break;
 
@@ -223,6 +268,9 @@ StatusCode dfu_receive()
       if (packet.LEN % 4 != 0) {
         uart_tx_raw(DFU_NACK);
         state = DFU_STATE_ABORT;
+#ifdef RTOS_TELEMETRY
+        telemetry_report_dfu_event(DFU_EVT_ABORTED, dfu_telemetry_target, DFU_ABORT_BAD_DATA_LEN);
+#endif
         break;
       }
       if (state == DFU_STATE_RECIEVE_DATA) {
@@ -265,6 +313,22 @@ StatusCode dfu_receive()
           crc32_update(&crc_ctx, packet.DATA, to_hash);
           bytes_hashed += to_hash;
         }
+
+#ifdef RTOS_TELEMETRY
+        // Throttled to ~1%-of-img_length steps (~100 packets/transfer
+        // regardless of image size) — DFU is single-threaded and ACK-gated,
+        // so an event per 256-byte CMD_DATA chunk (up to ~32k for an 8MB app)
+        // would add that many blocking UART3 writes onto the flashing hot
+        // path. See md/client/device/boot_init_tracking.md.
+        if (img_length > 0) {
+          uint32_t pct = (bytes_hashed * 100U) / img_length;
+          if (pct > dfu_telemetry_last_pct) {
+            dfu_telemetry_last_pct = pct;
+            telemetry_report_dfu_event(DFU_EVT_DATA_PROGRESS, dfu_telemetry_target, bytes_hashed);
+          }
+        }
+#endif
+
         uart_tx_raw(DFU_ACK);
       }
 
@@ -273,14 +337,24 @@ StatusCode dfu_receive()
     case CMD_ABORT:
       uart_tx_raw(DFU_NACK);
       state = DFU_STATE_ABORT;
+#ifdef RTOS_TELEMETRY
+      telemetry_report_dfu_event(DFU_EVT_ABORTED, dfu_telemetry_target, DFU_ABORT_HOST_ABORT);
+#endif
       break;
 
     case CMD_FINISH: {
       uint32_t img_actual_crc = crc32_finish(&crc_ctx);
       uart_printf("DFU CRC | Expected: 0x%08X | Actual: 0x%08X\r\n", img_expected_crc, img_actual_crc);
+#ifdef RTOS_TELEMETRY
+      telemetry_report_dfu_event(DFU_EVT_CRC_CHECK_RESULT, dfu_telemetry_target,
+                                  (img_actual_crc == img_expected_crc) ? 1U : 0U);
+#endif
       if (img_actual_crc != img_expected_crc) {
         uart_tx_raw(DFU_NACK);
         state = DFU_STATE_ABORT;
+#ifdef RTOS_TELEMETRY
+        telemetry_report_dfu_event(DFU_EVT_ABORTED, dfu_telemetry_target, DFU_ABORT_CRC_MISMATCH);
+#endif
         break;
       }
 
@@ -294,6 +368,10 @@ StatusCode dfu_receive()
       if (is_self_update) {
         uart_tx_raw(DFU_ACK);
         uart_print("DFU: bootloader update complete, resetting\r\n");
+#ifdef RTOS_TELEMETRY
+        // extra=0 — "new active_app_slot" doesn't apply to a bootloader self-update.
+        telemetry_report_dfu_event(DFU_EVT_COMMITTED, DFU_TARGET_BOOTLOADER, 0);
+#endif
         uart_deinit();
         watchdog_trigger_reset();
         // never reached
@@ -303,10 +381,17 @@ StatusCode dfu_receive()
       // the transfer was intact, not that the bytes actually committed to eMMC
       // - so validate by reading the slot back before flipping to it.
       uint32_t new_slot = APP_SLOT_OTHER(wdt_meta.active_app_slot);
-      if (boot_validate_app(APP_SLOT_TO_SECTOR(new_slot)) != E_OK) {
+      bool app_valid = (boot_validate_app(APP_SLOT_TO_SECTOR(new_slot)) == E_OK);
+#ifdef RTOS_TELEMETRY
+      telemetry_report_dfu_event(DFU_EVT_READBACK_VALIDATE, DFU_TARGET_APP, app_valid ? 1U : 0U);
+#endif
+      if (!app_valid) {
         uart_print("DFU: new slot failed read-back validation, not committing\r\n");
         uart_tx_raw(DFU_NACK);
         state = DFU_STATE_ABORT;   // active slot untouched - nothing to roll back
+#ifdef RTOS_TELEMETRY
+        telemetry_report_dfu_event(DFU_EVT_ABORTED, DFU_TARGET_APP, DFU_ABORT_READBACK_FAILED);
+#endif
         break;
       }
 
@@ -315,11 +400,18 @@ StatusCode dfu_receive()
       // the app's vector-table region, i.e. the first firmware sector. Read it
       // back from eMMC rather than trusting the in-flight stream.
       uint8_t marker_sector[SECTOR_SIZE] __attribute__((aligned(4)));
-      if ((emmc_read_blocks(APP_SLOT_TO_SECTOR(new_slot) + 1U, marker_sector, 1U) != E_OK)
-          || (*(const uint32_t *)&marker_sector[DFU_APP_MARKER_OFFSET] != DFU_APP_MAGIC)) {
+      bool marker_ok = (emmc_read_blocks(APP_SLOT_TO_SECTOR(new_slot) + 1U, marker_sector, 1U) == E_OK)
+                        && (*(const uint32_t *)&marker_sector[DFU_APP_MARKER_OFFSET] == DFU_APP_MAGIC);
+#ifdef RTOS_TELEMETRY
+      telemetry_report_dfu_event(DFU_EVT_MARKER_CHECK, DFU_TARGET_APP, marker_ok ? 1U : 0U);
+#endif
+      if (!marker_ok) {
         uart_print("DFU: image missing DFU-support marker, refusing to commit\r\n");
         uart_tx_raw(DFU_NACK);
         state = DFU_STATE_ABORT;   // active slot untouched — nothing to roll back
+#ifdef RTOS_TELEMETRY
+        telemetry_report_dfu_event(DFU_EVT_ABORTED, DFU_TARGET_APP, DFU_ABORT_MARKER_MISSING);
+#endif
         break;
       }
 
@@ -334,6 +426,9 @@ StatusCode dfu_receive()
       uart_tx_raw(DFU_ACK);
       uart_printf("DFU: slot %s written & validated, now active (trial)\r\n",
                   APP_SLOT_LETTER(new_slot));
+#ifdef RTOS_TELEMETRY
+      telemetry_report_dfu_event(DFU_EVT_COMMITTED, DFU_TARGET_APP, (new_slot == APP_SLOT_B) ? 1U : 0U);
+#endif
 
       state = DFU_STATE_DONE;
       break;

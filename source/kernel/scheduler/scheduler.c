@@ -148,6 +148,10 @@ StatusCode scheduler_init(uint32_t core_id, volatile uint32_t *p_clk_freq, uint3
     }
   }
 
+#ifdef RTOS_TELEMETRY
+  telemetry_report_boot_milestone(BOOT_MS_SCHEDULER_INIT_DONE, BOOT_STAGE_APP, core_id);
+#endif
+
   return E_OK;
 }
 
@@ -289,6 +293,12 @@ StatusCode scheduler_start(void)
   if (p_task_control_block[core_id] == NULL) {
     return E_EMPTY;
   }
+
+#ifdef RTOS_TELEMETRY
+  // Must fire before start_first_task() — that call never returns (rfeia
+  // into the first task), so this is the last point this function executes.
+  telemetry_report_boot_milestone(BOOT_MS_SCHEDULER_START, BOOT_STAGE_APP, core_id);
+#endif
 
   start_first_task();
 
@@ -436,7 +446,9 @@ static void block_until(uint64_t wakeup_time)
   scheduler_add_to_blocked_list(p_task_control_block[core_id], wakeup_time);
   p_task_control_block[core_id]->current_state = TASK_STATE_BLOCKED;
 #ifdef RTOS_TELEMETRY
-  telemetry_report_task_blocked(p_task_control_block[core_id]->task_id, core_id);
+  // block_until() backs task_delay_ms()/task_delay_until_ms() — a timed sleep, not a
+  // wait on any sync object.
+  telemetry_report_task_blocked(p_task_control_block[core_id]->task_id, core_id, SYNC_KIND_NONE, 0U);
 #endif
   scheduler_unlock(core_id);
   exit_critical(cpsr);

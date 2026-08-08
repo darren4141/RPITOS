@@ -134,7 +134,7 @@ void kmain(void)
   scheduler_init(0, &clk_freq, hz, &tick_count);
   uart_task_start();
 
-  mutex_init(&shared_mtx);
+  mutex_init(&shared_mtx, "shared_mtx");
   mutex_set_inheritance(&shared_mtx, 1);   // set to 0 to see uninherited inversion
 
   task_create(low_task, 4096, TASK_PRIORITY_1, NULL, "low", &tcb_low);

@@ -273,8 +273,8 @@ StatusCode uart_init(UartBaudrate baudrate)
 
 StatusCode uart_task_start(void)
 {
-  semaphore_init(&uart_data_ready, 1, 0);
-  semaphore_init(&uart_dma_done, 1, 0);
+  semaphore_init(&uart_data_ready, 1, 0, "uart_data_ready");
+  semaphore_init(&uart_dma_done, 1, 0, "uart_dma_done");
 
 #if UART_TX_DMA
   UART0->DMACR = DMACR_TXDMAE;                          // gate TX DREQ to the DMA

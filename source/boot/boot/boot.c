@@ -5,6 +5,7 @@
 #include "dfu_receive.h"
 #include "emmc.h"
 #include "memory_map.h"
+#include "telemetry.h"
 #include "uart.h"
 
 static uint8_t current_sector[SECTOR_SIZE];
@@ -25,11 +26,19 @@ StatusCode boot_validate_app(uint32_t app_sector)
   const StartPacket *start_pkt = (const StartPacket *)current_sector;
 
   if ((start_pkt->version_num != 1) || (start_pkt->fw_length == 0)) {
+#ifdef RTOS_TELEMETRY
+    // No binary CRC computed yet for a header this malformed — report what was
+    // read, with actual_crc=0/crc_ok=0 so the host still sees the failure.
+    telemetry_report_boot_info_image_header(BOOT_STAGE_BOOTLOADER, start_pkt->version_num,
+                                             start_pkt->fw_length, start_pkt->crc, 0U, 0U);
+#endif
     return E_CORRUPTED;
   }
 
   uint32_t remaining = start_pkt->fw_length;
   uint32_t expected_crc = start_pkt->crc;
+  uint32_t version_num = start_pkt->version_num;
+  uint32_t fw_length = start_pkt->fw_length;
   uint32_t sector = app_sector + 1;
 
   CRC32 ctx;
@@ -45,6 +54,11 @@ StatusCode boot_validate_app(uint32_t app_sector)
 
   uint32_t actual_crc = crc32_finish(&ctx);
   uart_printf("boot_validate_app CRC | Expected: 0x%08X | Actual: 0x%08X\r\n", expected_crc, actual_crc);
+
+#ifdef RTOS_TELEMETRY
+  telemetry_report_boot_info_image_header(BOOT_STAGE_BOOTLOADER, version_num, fw_length,
+                                           expected_crc, actual_crc, (actual_crc == expected_crc) ? 1U : 0U);
+#endif
 
   return (actual_crc == expected_crc) ? E_OK : E_CORRUPTED;
 }
@@ -79,12 +93,19 @@ StatusCode boot_load_app(uint32_t app_sector)
   uart_printf("boot: loaded %u sectors (%uB) in %u us (%u KB/s)\r\n",
               sectors, (uint32_t)bytes, us, kbps);
 
+#ifdef RTOS_TELEMETRY
+  telemetry_report_boot_milestone(BOOT_MS_APP_LOAD_DONE, BOOT_STAGE_BOOTLOADER, 0);
+#endif
+
   return E_OK;
 }
 
 void boot_jump_to_app()
 {
   uart_print("boot: jumping to app\r\n");
+#ifdef RTOS_TELEMETRY
+  telemetry_report_boot_milestone(BOOT_MS_JUMPING_TO_APP, BOOT_STAGE_BOOTLOADER, 0);
+#endif
 
   // Wait for UART PL011 TX FIFO to drain before jumping
   while (UART0->FR & FR_BUSY) {}

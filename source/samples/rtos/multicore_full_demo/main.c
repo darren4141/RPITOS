@@ -1,7 +1,9 @@
 // See README.md for what this sample demonstrates.
 
+#include "boot_flags.h"
 #include "companion_core.h"
 #include "dfu_trigger.h"
+#include "emmc.h"
 #include "gentimer.h"
 #include "gic.h"
 #include "gpio.h"
@@ -250,6 +252,18 @@ void kmain(void)
 #ifdef RTOS_TELEMETRY
   // Must run before any core's scheduler_init() — see instrumentation.md.
   uart_telemetry_init();
+  telemetry_report_boot_stage_enter(BOOT_STAGE_APP);
+
+  // Re-broadcast boot_flags here, not just rely on the bootloader's own one-shot
+  // PKT_BOOT_INFO(BOOT_FLAGS) — that packet fires before the app exists, so a host
+  // that connects (the normal case: flash, board boots on its own schedule, GUI
+  // launched afterward) misses it entirely with no replay possible. boot_flags itself
+  // is safe to read directly here with no re-read call needed: it lives at a fixed
+  // shared RAM address (BOOT_FLAGS_START_ADDR) the bootloader already populated and
+  // the app's own BSS-clear never touches. See md/client/device/boot_init_tracking.md.
+  telemetry_report_boot_info_boot_flags((uint8_t)boot_flags.reset_reason,
+                                         (boot_flags.dfu_requested == DFU_REQUEST) ? 1U : 0U,
+                                         (uint8_t)boot_flags.fw_crc_ok);
 #endif
 
   uart_print("\r\n=== multicore_full_demo ===\r\n"
@@ -266,11 +280,11 @@ void kmain(void)
   software_timer_init();
   software_timer_start();
 
-  mutex_init(&g_counter_mutex);
-  semaphore_init(&g_ping_sem, 1, 0);
-  semaphore_init(&g_data_ready_sem, 1, 0);
-  semaphore_init(&g_processing_done_sem, 1, 0);
-  queue_init(&g_msg_queue, 4, sizeof(uint32_t));
+  mutex_init(&g_counter_mutex, "counter_mtx");
+  semaphore_init(&g_ping_sem, 1, 0, "ping_sem");
+  semaphore_init(&g_data_ready_sem, 1, 0, "data_ready_sem");
+  semaphore_init(&g_processing_done_sem, 1, 0, "processing_done_sem");
+  queue_init(&g_msg_queue, 4, sizeof(uint32_t), "msg_queue");
 
   task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, "mutex_ctr0", &tcb_mutex0);
   task_create(ping_task, 2048, TASK_PRIORITY_2, NULL, "ping", &tcb_ping);
@@ -281,10 +295,28 @@ void kmain(void)
 
   gic_distributor_init();   // global — must happen before any core is released
   gic_percore_init();       // core 0's own PPI30 + CPU-interface enable
+#ifdef RTOS_TELEMETRY
+  telemetry_report_boot_milestone(BOOT_MS_GIC_INIT_DONE, BOOT_STAGE_APP, 0);
+#endif
   gentimer_init(&clk_freq, hz);
+#ifdef RTOS_TELEMETRY
+  telemetry_report_boot_milestone(BOOT_MS_GENTIMER_INIT_DONE, BOOT_STAGE_APP, 0);
+#endif
 
   // A/B trial boot: confirm this app slot now that init succeeded.
   wdt_meta_confirm_slot();
+#ifdef RTOS_TELEMETRY
+  telemetry_report_boot_milestone(BOOT_MS_SLOT_CONFIRMED, BOOT_STAGE_APP, 0);
+  // Same "host may have connected after the bootloader already ran" reasoning as the
+  // boot_flags broadcast above — unlike boot_flags, wdt_meta is a per-image global,
+  // not a shared-RAM struct, so the app's own copy only becomes valid once something
+  // in this image calls wdt_meta_read(); wdt_meta_confirm_slot() (just above) already
+  // does that internally, so wdt_meta is guaranteed fresh right here.
+  telemetry_report_boot_info_slot_state((wdt_meta.active_app_slot == APP_SLOT_B) ? 1U : 0U,
+                                         (uint8_t)wdt_meta.app_slot_trial, wdt_meta.trial_boot_count,
+                                         wdt_meta.wdt_reset_count, wdt_meta.wdt_reset_tolerance,
+                                         (uint8_t)wdt_meta.wdt_reset_policy, (uint8_t)wdt_meta.wdt_reset_reason);
+#endif
 
   for (volatile uint32_t i = 0; i < 20000U; i++) {
   }

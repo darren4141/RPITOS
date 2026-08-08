@@ -4,8 +4,9 @@
 
 #include "heap.h"
 #include "interrupts.h"
+#include "telemetry.h"
 
-StatusCode queue_init(Queue *q, uint32_t capacity, uint32_t item_size)
+StatusCode queue_init(Queue *q, uint32_t capacity, uint32_t item_size, const char *name)
 {
   q->capacity = capacity;
   q->item_size = item_size;
@@ -17,8 +18,20 @@ StatusCode queue_init(Queue *q, uint32_t capacity, uint32_t item_size)
     return E_OUT_OF_MEM;
   }
 
-  semaphore_init(&q->data_available, capacity, 0);
-  semaphore_init(&q->space_available, capacity, capacity);
+#ifdef RTOS_TELEMETRY
+  // Register the queue itself first so its sync_id exists to hand to its two
+  // internal semaphores as parent_sync_id. Their own names are short and generic
+  // ("space"/"data") — the host combines them with the queue's own (real) name
+  // for display, rather than building a concatenated string on-device with no
+  // libc string formatting available in this freestanding build.
+  q->sync_id = telemetry_register_sync(SYNC_KIND_QUEUE, TELEMETRY_SYNC_ID_NONE, name);
+  semaphore_init_with_parent(&q->data_available, capacity, 0, "data", q->sync_id);
+  semaphore_init_with_parent(&q->space_available, capacity, capacity, "space", q->sync_id);
+#else
+  (void)name;
+  semaphore_init(&q->data_available, capacity, 0, NULL);
+  semaphore_init(&q->space_available, capacity, capacity, NULL);
+#endif
   spinlock_init(&q->lock);
 
   return E_OK;

@@ -2,6 +2,7 @@
 
 #include "gic.h"
 #include "memory_map.h"
+#include "telemetry.h"
 
 // Cross-image release mailbox — a software convention (a fixed RAM address
 // both the bootstrap image and this one agree on), NOT the ARM Local
@@ -57,6 +58,9 @@ StatusCode companion_core_start(uint32_t core_id, void (*entry)(void))
   __asm__ volatile ("dsb sy" ::: "memory");
   __asm__ volatile ("sev");
   g_core_alive_mask |= (1U << core_id);
+#ifdef RTOS_TELEMETRY
+  telemetry_report_boot_milestone(BOOT_MS_CORE_RELEASED, BOOT_STAGE_APP, core_id);
+#endif
   return E_OK;
 }
 
