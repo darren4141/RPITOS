@@ -91,6 +91,8 @@ static void core1_kmain(void)
   scheduler_init(1U, &core1_clk_freq, hz, &core1_tick_count);
   uart_tx_raw('[');uart_tx_raw('G');uart_tx_raw('3');uart_tx_raw(']'); // DEBUG: scheduler_init done
 
+  watchdog_core_task_start();
+
   TaskControlBlock *tcb;
   task_create(led16_task, 2048, TASK_PRIORITY_1, NULL, "led16", &tcb);
   uart_tx_raw('[');uart_tx_raw('T');uart_tx_raw('1');uart_tx_raw(']'); // DEBUG: task16 created
@@ -138,7 +140,18 @@ void kmain(void)
              "core 1: its own RTOS scheduler, 3 tasks blinking GPIO 16/20/21"
              " and each printing over UART\r\n\r\n");
 
-  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 1, 1000);
+  static CompanionCoreContext cc_ctx;
+  companion_core_init(&cc_ctx);
+
+  static WatchdogConfig watchdog_config = {
+    .timeout_s = 5,
+    .policy = WATCHDOG_RESET_POLICY_FORCE_UPDATE,
+    .tolerance = 1,
+    .confirm_delay_ms = 1000,
+    .multicore_mode = true,
+    .companion_core_ctx = &cc_ctx,
+  };
+  watchdog_init(&watchdog_config);
 
   scheduler_init(0, &clk_freq, hz, &tick_count);
   uart_task_start();

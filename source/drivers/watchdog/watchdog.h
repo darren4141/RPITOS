@@ -1,6 +1,7 @@
 #ifndef WATCHDOG_H
 #define WATCHDOG_H
 
+#include "companion_core.h"
 #include "status.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -36,6 +37,7 @@ typedef enum {
 
 #define WDT_META_MAGIC              0xB007DA7AU
 #define WDT_KICK_PERIOD             2000U
+#define WDT_CORE_KICK_PERIOD        1000U   // companion-core report cadence, see docs.md "Multicore mode"
 
 // See docs.md for the A/B trial-boot mechanism this bounds.
 #define APP_SLOT_TRIAL_MAX_ATTEMPTS 3U
@@ -46,11 +48,28 @@ typedef enum {
 // policy on the very first WDT reset. Only a negative tolerance disables it.
 #define WATCHDOG_RESET_TOLERANCE_INFINITE (-1)
 
-// Pass to watchdog_init()'s `confirm_delay_ms` to skip arming the confirm-slot
+// Pass as `confirm_delay_ms` in WatchdogConfig to skip arming the confirm-slot
 // timer entirely — the app is responsible for calling wdt_meta_confirm_slot()
 // itself once it judges its own state healthy, instead of a fixed timeout
 // confirming for it. No effect in WATCHDOG_MINIMAL builds (bootloader).
 #define WATCHDOG_CONFIRM_MANUAL (-1)
+
+/**
+ * @brief Watchdog configuration, owned by the caller and handed to watchdog_init().
+ * @note watchdog_init() stores the *pointer*, not a copy — the struct must have
+ * static or global storage duration (not a stack local that goes out of scope).
+ * The driver may modify fields after init (e.g. `timeout_s` is clamped in place
+ * to the value actually armed) so other components can read the live config
+ * through the same pointer.
+ */
+typedef struct {
+  uint32_t timeout_s;             // clamped in place to [1, PM_WDOG_MAX_TIMEOUT] by watchdog_init()
+  WatchdogResetPolicy policy;
+  int32_t tolerance;               // see WATCHDOG_RESET_TOLERANCE_INFINITE
+  int64_t confirm_delay_ms;        // see WATCHDOG_CONFIRM_MANUAL
+  bool multicore_mode;             // see docs.md "Multicore mode"
+  CompanionCoreContext *companion_core_ctx;   // required when multicore_mode is true
+} WatchdogConfig;
 
 typedef struct {
   uint32_t magic;
@@ -91,23 +110,31 @@ StatusCode wdt_meta_confirm_slot(void);
 bool watchdog_was_wdt_reset(void);
 
 /**
- * @brief Arm the watchdog with a [1, 15] second timeout (clamped).
- * @note The bootloader applies `policy` once `wdt_reset_count > tolerance`.
- * A negative tolerance (see WATCHDOG_RESET_TOLERANCE_INFINITE) means the
- * policy never fires. tolerance=0 is the strictest setting, not "never" —
- * it trips on the very first WDT reset.
- * @note `confirm_delay_ms` sets how long after watchdog_task_start() the
- * confirm-slot timer waits before confirming the active app slot (see
+ * @brief Arm the watchdog from `config` (timeout clamped to [1, 15] seconds).
+ * @note Stores the pointer for later calls (watchdog_task_start(), and any
+ * future API that needs the live config) — see WatchdogConfig's storage-
+ * duration note. Returns E_INVALID_ARGS if `config` is NULL or timeout_s is 0.
+ * @note The bootloader applies `config->policy` once `wdt_reset_count >
+ * config->tolerance`. A negative tolerance (see WATCHDOG_RESET_TOLERANCE_INFINITE)
+ * means the policy never fires. tolerance=0 is the strictest setting, not
+ * "never" — it trips on the very first WDT reset.
+ * @note `config->confirm_delay_ms` sets how long after watchdog_task_start()
+ * the confirm-slot timer waits before confirming the active app slot (see
  * WATCHDOG_CONFIRM_MANUAL to disable it and confirm manually instead). No
  * effect in WATCHDOG_MINIMAL builds.
  */
-StatusCode watchdog_init(uint32_t timeout_s, WatchdogResetPolicy policy, int32_t tolerance,
-                          int64_t confirm_delay_ms);
+StatusCode watchdog_init(WatchdogConfig *config);
 
 /**
  * @brief Reset the countdown. Safe to call from any context — a single 32-bit MMIO write is atomic on Cortex-A72.
  */
 void watchdog_kick(void);
+
+/**
+ * @brief Per-core watchdog report; single-core builds just call watchdog_kick().
+ * @note See docs.md "Multicore mode" for the aggregation this gates.
+ */
+StatusCode watchdog_core_kick(void);
 
 /**
  * @brief Disarm the watchdog. No reset will occur after this returns.
@@ -127,8 +154,15 @@ void watchdog_trigger_reset(void);
  * @brief Arm the periodic watchdog-kick timer and the confirm-slot timer/task
  * (the latter only if watchdog_init() was called with a non-negative
  * confirm_delay_ms).
+ * @note Returns E_NOT_INITIALIZED if watchdog_init() has not been called yet.
  */
 StatusCode watchdog_task_start(void);
+
+/**
+ * @brief Start a companion core's periodic watchdog_core_kick() reports.
+ * @note Call from a companion core (not core 0), after its own scheduler_init().
+ */
+StatusCode watchdog_core_task_start(void);
 #endif
 
 #endif

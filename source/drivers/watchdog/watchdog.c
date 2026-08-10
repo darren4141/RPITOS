@@ -26,9 +26,10 @@
 
 static uint32_t s_timeout_ticks;
 
-// Set by watchdog_init(); consumed by watchdog_task_start() (WATCHDOG_MINIMAL
-// builds never call either the setter's owning path or the consumer).
-static int64_t s_confirm_delay_ms = WATCHDOG_CONFIRM_MANUAL;
+// Set by watchdog_init(). NULL means not-yet-initialized — every API below
+// that reads config fields (as opposed to derived state like s_timeout_ticks)
+// must check this before dereferencing it.
+static WatchdogConfig *s_config = NULL;
 
 // ── WDT persistent metadata ───────────────────────────────────────────────────
 
@@ -125,26 +126,25 @@ bool watchdog_was_wdt_reset(void)
   return (PM_RSTS & PM_RSTS_HADWRQ) != 0;
 }
 
-StatusCode watchdog_init(uint32_t timeout_s, WatchdogResetPolicy policy, int32_t tolerance,
-                          int64_t confirm_delay_ms)
+StatusCode watchdog_init(WatchdogConfig *config)
 {
-  if (timeout_s == 0) {
+  if (config == NULL || config->timeout_s == 0) {
     return E_INVALID_ARGS;
   }
-  if (timeout_s > PM_WDOG_MAX_TIMEOUT) {
-    timeout_s = PM_WDOG_MAX_TIMEOUT;
+  if (config->timeout_s > PM_WDOG_MAX_TIMEOUT) {
+    config->timeout_s = PM_WDOG_MAX_TIMEOUT;
   }
 
-  s_timeout_ticks = (timeout_s * PM_WDOG_TICKS_PER_S) & PM_WDOG_COUNT_MASK;
-  s_confirm_delay_ms = confirm_delay_ms;
+  s_timeout_ticks = (config->timeout_s * PM_WDOG_TICKS_PER_S) & PM_WDOG_COUNT_MASK;
+  s_config = config;
 
   PM_WDOG = PM_PASSWORD | s_timeout_ticks;
   PM_RSTC = PM_PASSWORD | PM_RSTC_WRCFG_FULL_RESET;
 
   emmc_init();   // idempotent — no-op if already initialized
   if (wdt_meta_read() == E_OK) {
-    wdt_meta.wdt_reset_tolerance = tolerance;
-    wdt_meta.wdt_reset_policy = (uint32_t)policy;
+    wdt_meta.wdt_reset_tolerance = config->tolerance;
+    wdt_meta.wdt_reset_policy = (uint32_t)config->policy;
     wdt_meta_write();
   }
 
@@ -154,6 +154,34 @@ StatusCode watchdog_init(uint32_t timeout_s, WatchdogResetPolicy policy, int32_t
 void watchdog_kick(void)
 {
   PM_WDOG = PM_PASSWORD | s_timeout_ticks;
+}
+
+StatusCode watchdog_core_kick(void)
+{
+  if (s_config == NULL) {
+    return E_NOT_INITIALIZED;
+  }
+
+  if (!s_config->multicore_mode || s_config->companion_core_ctx == NULL) {
+    watchdog_kick();
+    return E_OK;
+  }
+
+  CompanionCoreContext *ctx = s_config->companion_core_ctx;
+  ctx->core_kicked[companion_core_id()] = 1U;
+
+  uint32_t mask = ctx->expected_mask;
+  for (uint32_t i = 0U; i < COMPANION_CORE_MAX_CORES; i++) {
+    if (((mask & (1U << i)) != 0U) && (ctx->core_kicked[i] == 0U)) {
+      return E_OK;   // not everyone has reported yet this round
+    }
+  }
+
+  for (uint32_t i = 0U; i < COMPANION_CORE_MAX_CORES; i++) {
+    ctx->core_kicked[i] = 0U;
+  }
+  watchdog_kick();
+  return E_OK;
 }
 
 void watchdog_disable(void)
@@ -184,7 +212,7 @@ static uint32_t s_watchdog_kick_count = 0U;
 static void watchdog_kick_cb(void *params)
 {
   (void)params;
-  watchdog_kick();
+  watchdog_core_kick();
   s_watchdog_kick_count++;
 }
 
@@ -212,6 +240,10 @@ StatusCode watchdog_task_start(void)
 {
   StatusCode ret;
 
+  if (s_config == NULL) {
+    return E_NOT_INITIALIZED;
+  }
+
   ret = software_timer_create(&s_watchdog_kick_timer, WDT_KICK_PERIOD, watchdog_kick_cb, TIMER_MODE_PERIODIC);
   if (ret != E_OK) {
     return ret;
@@ -222,8 +254,8 @@ StatusCode watchdog_task_start(void)
     return ret;
   }
 
-  if (s_confirm_delay_ms >= 0) {
-    uint64_t delay = (s_confirm_delay_ms > 0) ? (uint64_t)s_confirm_delay_ms : 1U;
+  if (s_config->confirm_delay_ms >= 0) {
+    uint64_t delay = (s_config->confirm_delay_ms > 0) ? (uint64_t)s_config->confirm_delay_ms : 1U;
 
     semaphore_init(&s_confirm_semaphore, 1U, 0U, "wdt_confirm_sem");
 
@@ -244,6 +276,28 @@ StatusCode watchdog_task_start(void)
   }
 
   return E_OK;
+}
+
+static void watchdog_core_kick_task(void *params)
+{
+  (void)params;
+  while (1) {
+    watchdog_core_kick();
+    task_delay_ms(WDT_CORE_KICK_PERIOD);
+  }
+}
+
+StatusCode watchdog_core_task_start(void)
+{
+  if (s_config == NULL) {
+    return E_NOT_INITIALIZED;
+  }
+  if (!s_config->multicore_mode || s_config->companion_core_ctx == NULL) {
+    return E_INVALID_ARGS;
+  }
+
+  TaskControlBlock *tcb;
+  return task_create(watchdog_core_kick_task, 512, TASK_PRIORITY_1, NULL, "wdt_core_kick", &tcb);
 }
 
 #endif

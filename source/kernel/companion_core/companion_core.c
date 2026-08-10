@@ -1,5 +1,7 @@
 #include "companion_core.h"
 
+#include <stddef.h>
+
 #include "gic.h"
 #include "memory_map.h"
 #include "telemetry.h"
@@ -10,6 +12,9 @@ static volatile uintptr_t *const g_core_mailbox =
 
 // Bit N set = core N released and not yet reset. Single-writer (core 0)
 static volatile uint32_t g_core_alive_mask = 0;
+
+// Set by companion_core_init(); NULL means not-yet-initialized.
+static CompanionCoreContext *s_context = NULL;
 
 // Dedicated per-core park stack
 #define COMPANION_CORE_PARK_STACK_WORDS 2048
@@ -35,9 +40,27 @@ StatusCode companion_core_start(uint32_t core_id, void (*entry)(void))
   __asm__ volatile ("dsb sy" ::: "memory");
   __asm__ volatile ("sev");
   g_core_alive_mask |= (1U << core_id);
+  if (s_context != NULL) {
+    s_context->expected_mask |= (1U << core_id);
+  }
 #ifdef RTOS_TELEMETRY
   telemetry_report_boot_milestone(BOOT_MS_CORE_RELEASED, BOOT_STAGE_APP, core_id);
 #endif
+  return E_OK;
+}
+
+StatusCode companion_core_init(CompanionCoreContext *context)
+{
+  if (context == NULL) {
+    return E_INVALID_ARGS;
+  }
+
+  context->expected_mask = (1U << 0);   // core 0 — the only caller of this function
+  for (uint32_t i = 0U; i < COMPANION_CORE_MAX_CORES; i++) {
+    context->core_kicked[i] = 0U;
+  }
+
+  s_context = context;
   return E_OK;
 }
 

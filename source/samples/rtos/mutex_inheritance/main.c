@@ -144,7 +144,13 @@ void kmain(void)
   software_timer_init();
   software_timer_start();
 
-  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2, 1000);
+  static WatchdogConfig watchdog_config = {
+    .timeout_s = 5,
+    .policy = WATCHDOG_RESET_POLICY_FORCE_UPDATE,
+    .tolerance = 2,
+    .confirm_delay_ms = 1000,
+  };
+  watchdog_init(&watchdog_config);
   watchdog_task_start();
 
   gic_distributor_init();

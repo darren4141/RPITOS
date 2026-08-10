@@ -14,6 +14,7 @@ typedef enum {
   E_DATA               = 9,
   E_CRC                = 10,
   E_NOTSUPP            = 11,
+  E_NOT_INITIALIZED    = 12,
 } StatusCode;
 
 /**

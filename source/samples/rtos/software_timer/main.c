@@ -171,7 +171,13 @@ void kmain(void)
   task_create(demo_task, 2048, TASK_PRIORITY_1, NULL, "demo", &tcb_demo);
   task_create(spawner_task, 2048, TASK_PRIORITY_2, NULL, "spawner", &tcb_spawner);
 
-  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2, 1000);
+  static WatchdogConfig watchdog_config = {
+    .timeout_s = 5,
+    .policy = WATCHDOG_RESET_POLICY_FORCE_UPDATE,
+    .tolerance = 2,
+    .confirm_delay_ms = 1000,
+  };
+  watchdog_init(&watchdog_config);
   watchdog_task_start();
 
   gic_distributor_init();
