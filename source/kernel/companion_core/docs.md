@@ -80,3 +80,39 @@ SGI. Only core 0 ever calls `companion_core_start()`/
 `companion_core_reset_active()` in every current sample, so a plain
 `volatile` is enough — same single-writer reasoning as `uart_task_started`
 in `uart.c`.
+
+## Multicore watchdog
+
+`CompanionCoreContext` is a second, unrelated tracking mechanism — don't
+conflate it with `g_core_alive_mask` above. It exists so `watchdog.c`'s
+multicore mode can gate the real PM watchdog kick on every active core
+reporting alive, not just core 0.
+
+The caller owns a `CompanionCoreContext` (static/global storage — 
+`companion_core_init()` stores the pointer, not a copy) and can hand the same
+pointer to `WatchdogConfig.companion_core_ctx` (see `watchdog/docs.md`) so
+both drivers see the same live state.
+
+- `expected_mask`: bit N set the moment core 0 releases core N —
+  `companion_core_start()` sets it itself, as part of the release, not the
+  target core reporting in on its own. Core 0's own bit is set by
+  `companion_core_init()`. This is deliberate: if it were the *released*
+  core setting its own bit after finishing its bring-up, a core that never
+  makes it that far (crashes in early startup, stuck before its first
+  instruction even runs) would simply never appear in the set and the
+  watchdog's AND-gate would silently ignore it forever. Setting the bit at
+  release time means a core that's commanded to start but never boots still
+  counts as "expected to report" — so it never kicks, the gate never closes,
+  and the hardware timeout fires. That's the actual point of the multicore
+  gate: catching a core that never comes up, not just one that comes up and
+  later hangs.
+- `core_kicked[N]`: written only by core N (single-writer per slot, safe
+  without atomics — same reasoning as `g_core_alive_mask`). `watchdog.c`
+  reads across all slots and resets them once every bit in `expected_mask`
+  has reported in for the round.
+
+Each companion core calls `watchdog_core_task_start()` once, near the end of
+its own bring-up (after `scheduler_init()`, before `scheduler_start()`), to
+begin reporting kicks — see `watchdog/docs.md`'s "Multicore mode" section for
+the aggregation logic and why any core (not just core 0) safely performs the
+actual `PM_WDOG` write.

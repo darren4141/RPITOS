@@ -173,7 +173,13 @@ void kmain(void)
   software_timer_init();
   software_timer_start();
 
-  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 3, 1000);
+  static WatchdogConfig watchdog_config = {
+    .timeout_s = 5,
+    .policy = WATCHDOG_RESET_POLICY_FORCE_UPDATE,
+    .tolerance = 3,
+    .confirm_delay_ms = 1000,
+  };
+  watchdog_init(&watchdog_config);
   ret = watchdog_task_start();
   if (ret != E_OK) {
     uart_printf("Create watchdog task failed with exit code %d\r\n", ret);

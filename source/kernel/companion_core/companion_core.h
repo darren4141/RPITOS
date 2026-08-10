@@ -8,11 +8,26 @@
 #define COMPANION_CORE_MAX_CORES 4
 
 /**
+ * @brief Shared companion-core bookkeeping; see docs.md's "Multicore watchdog" section.
+ * @note Pointer-owned by the caller — see docs.md for storage-duration rules.
+ */
+typedef struct {
+  volatile uint32_t expected_mask;
+  volatile uint8_t core_kicked[COMPANION_CORE_MAX_CORES];
+} CompanionCoreContext;
+
+/**
+ * @brief Link `context` to the companion_core module; marks core 0 expected.
+ */
+StatusCode companion_core_init(CompanionCoreContext *context);
+
+/**
  * @brief Assign an entry function to a secondary core (1..3) and release it from the bootstrap parking loop.
  * @note `entry` runs forever on that core and must never return, must not call
  * blocking kernel APIs (the core has no TCB and is not scheduled), and must
  * not touch data shared with another core without a spinlock — enter_critical
  * only masks interrupts on the calling core.
+ * @note Also marks core_id expected in the linked CompanionCoreContext, if any — see docs.md.
  * @return E_INVALID_ARGS for core 0 or an id >= COMPANION_CORE_MAX_CORES.
  */
 StatusCode companion_core_start(uint32_t core_id, void (*entry)(void));

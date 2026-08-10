@@ -203,6 +203,7 @@ static void core1_kmain(void)
   gic_percore_init();
   gentimer_init(&core1_clk_freq, hz);
   scheduler_init(1U, &core1_clk_freq, hz, &core1_tick_count);
+  watchdog_core_task_start();
 
   TaskControlBlock *tcb;
   task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, "mutex_ctr1", &tcb);
@@ -220,6 +221,7 @@ static void core2_kmain(void)
   gic_percore_init();
   gentimer_init(&core2_clk_freq, hz);
   scheduler_init(2U, &core2_clk_freq, hz, &core2_tick_count);
+  watchdog_core_task_start();
 
   TaskControlBlock *tcb;
   task_create(mutex_counter_task, 2048, TASK_PRIORITY_1, NULL, "mutex_ctr2", &tcb);
@@ -240,6 +242,7 @@ static void core3_kmain(void)
   // uart_telemetry_init() (core 0's kmain()) must already have run — every
   // core's idle-task setup broadcasts over telemetry during scheduler_init().
   scheduler_init(3U, &core3_clk_freq, hz, &core3_tick_count);
+  watchdog_core_task_start();
 
   TaskControlBlock *tcb;
   task_create(telemetry_publisher_task, 2048, TASK_PRIORITY_1, NULL, "telemetry_pub", &tcb);
@@ -273,7 +276,18 @@ void kmain(void)
              "core 2: RTOS — mutex counter + queue sender\r\n"
              "core 3: telemetry publisher (dedicated, no app tasks)\r\n\r\n");
 
-  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 1, 1000);
+  static CompanionCoreContext cc_ctx;
+  companion_core_init(&cc_ctx);
+
+  static WatchdogConfig watchdog_config = {
+    .timeout_s = 5,
+    .policy = WATCHDOG_RESET_POLICY_FORCE_UPDATE,
+    .tolerance = 1,
+    .confirm_delay_ms = 1000,
+    .multicore_mode = true,
+    .companion_core_ctx = &cc_ctx,
+  };
+  watchdog_init(&watchdog_config);
 
   scheduler_init(0, &clk_freq, hz, &tick_count);
   uart_task_start();
