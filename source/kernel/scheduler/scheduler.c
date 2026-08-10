@@ -11,13 +11,8 @@
 
 #define IDLE_STACK_DEPTH 64
 
-// Per-core scheduler state, including its own lock. Indexed by
-// TaskControlBlock.core_id (not the calling core) wherever a TCB is
-// involved, and by companion_core_id() for "operate on the calling core's own
-// scheduler" entry points (scheduler_switch_context, timer_tick_handler).
-// A task's core_id never changes (no task migration between cores), so every
-// scheduler operation only ever needs exactly one core's lock — routine
-// ticking on core N never contends core M's lock.
+// Per-core scheduler state, including its own lock — see scheduler/docs.md
+// "Locking model" for the core_id indexing rules.
 typedef struct {
   List ready_list[NUM_TASK_PRIORITIES];
   List blocked_task_list;
@@ -33,21 +28,15 @@ static SchedulerCore g_cores[COMPANION_CORE_MAX_CORES];
 
 TaskControlBlock *p_task_control_block[COMPANION_CORE_MAX_CORES];    // global — visible to assembly
 
-// Software-timer tick hook. software_timer.c provides the strong definition;
-// samples that do not link the software-timer module fall back to this weak
-// no-op, so the shared scheduler stays resolvable without forcing every sample
-// to pull in software_timer.o. Core-0-only service (see scheduler_init()).
+// Weak no-op fallbacks so the scheduler stays linkable without forcing every
+// sample to pull in software_timer.o/dfu_trigger.o — see scheduler/docs.md
+// "Weak-symbol hooks".
 void software_timer_tick(uint64_t now_tick);
 __attribute__((weak)) void software_timer_tick(uint64_t now_tick)
 {
   (void)now_tick;
 }
 
-// DFU reboot-task hook, called unconditionally from scheduler_init() below so
-// every app gets DFU recovery without opting in. dfu_trigger.c provides the
-// strong definition (creates the semaphore-blocked task that safely calls
-// enter_bootloader() from task context, never from the ISR that detects the
-// key); samples that do not link dfu_trigger.o fall back to this weak no-op.
 __attribute__((weak)) StatusCode dfu_trigger_task_start(void)
 {
   return E_OK;
@@ -243,9 +232,7 @@ void scheduler_switch_context(void)
   SchedulerCore *core = &g_cores[core_id];
   TaskControlBlock *current = p_task_control_block[core_id];
 
-  // Stack watermark check: the lowest word of every task stack is initialized to
-  // TASK_WATERMARK and never used for real data. If it has been overwritten the
-  // stack has overflowed. Hang here so JTAG can identify the task (task_id, stack_base).
+  // Stack watermark check — see scheduler/docs.md "Stack watermark check".
   if ((current != NULL) && (current->stack_base != NULL)
       && (current->stack_base[0] != TASK_WATERMARK)) {
     for ( ; ; ) {

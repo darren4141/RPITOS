@@ -82,7 +82,13 @@ StatusCode uart_rx_timed(uint8_t *out, uint32_t timeout_ms)
   asm volatile ("mrc  p15, 0, %0, c14, c0, 0" : "=r" (frq));
   asm volatile ("mrrc p15, 0, %0, %1,  c14"   : "=r" (lo), "=r" (hi));
   uint64_t start = ((uint64_t)hi << 32) | lo;
-  uint64_t ticks = (uint64_t)frq * timeout_ms / 1000ULL;
+  // Divide by 1000 first (32-bit, single instruction) instead of
+  // (uint64_t)frq * timeout_ms / 1000ULL — a 64/64 division pulls in
+  // libgcc's __udivmoddi4 (~900 bytes), which is what pushed the bootstrap
+  // sample over its hard 32 KB link budget (source/samples/boot/bootstrap/bootstrap.ld).
+  // CNTFRQ is a fixed 54 MHz on this hardware (see CLAUDE.md), so frq / 1000
+  // has no remainder to lose; the follow-on 64-bit multiply is a plain UMULL.
+  uint64_t ticks = (uint64_t)(frq / 1000U) * timeout_ms;
   while (UART0->FR & FR_RXFE) {
     asm volatile ("mrrc p15, 0, %0, %1, c14" : "=r" (lo), "=r" (hi));
     if ((((uint64_t)hi << 32) | lo) - start >= ticks) {

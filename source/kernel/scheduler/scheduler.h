@@ -5,12 +5,9 @@
 #include "status.h"
 #include "task_types.h"
 
-// One slot per core — indexed by TaskControlBlock.core_id, not by whichever
-// core happens to be calling. This is what lets semaphore_give()/mutex_unlock()
-// called on one core correctly move a task that belongs to another core's
-// scheduler. Referenced directly by symbol name from startup/startup.s's
-// _irq_handler and start_first_task, which index it by MPIDR & 3 — keep this
-// declaration in sync with those.
+// One slot per core, indexed by TaskControlBlock.core_id (see scheduler/docs.md
+// "Locking model"). Referenced by symbol name from startup/startup.s's
+// _irq_handler/start_first_task — keep this declaration in sync with those.
 extern TaskControlBlock *p_task_control_block[COMPANION_CORE_MAX_CORES];
 
 /**
@@ -25,24 +22,12 @@ StatusCode scheduler_init(uint32_t core_id, volatile uint32_t *p_clk_freq, uint3
 
 /**
  * @brief Acquire the given core's scheduler lock, guarding its ready/blocked lists.
- * @note enter_critical() alone only stops same-core preemption — it does
- * nothing against a second core touching the same memory. Each core has its
- * OWN lock (not one global lock) so routine ticking on core N never contends
- * core M's — a task's core_id never changes, so every scheduler operation
- * only ever needs exactly one core's lock: same-core callers
- * (scheduler_switch_context, timer_tick_handler, task_create, block_until)
- * pass companion_core_id(); cross-core callers (semaphore_give, mutex_unlock,
- * scheduler_change_task_priority) pass the *target* task's tcb->core_id.
- * scheduler_add_to_ready_list()/scheduler_remove_from_ready_list()/
- * scheduler_add_to_blocked_list()/scheduler_remove_from_blocked_list()/
- * scheduler_change_task_priority() do not take this lock themselves — the
- * caller must hold scheduler_lock(tcb->core_id) around them. Pair with
- * enter_critical() (acquired first) if the caller also needs same-core
- * IRQ-preemption safety. If also holding a Semaphore's/Mutex's own lock,
- * acquire that first and this second — never the reverse, or two cores can
- * deadlock against each other. Never hold across a blocking wait (a
- * spin-on-task-state loop) — acquire/release around each short
- * list-touching step instead.
+ * @note One lock per core (not global) — see scheduler/docs.md "Locking
+ * model" for who passes which core_id and the full list of calls that
+ * require this lock already held.
+ * @warning Lock order: if also holding a Semaphore's/Mutex's own lock,
+ * acquire that FIRST, then this — never the reverse, or two cores can
+ * deadlock against each other.
  */
 void scheduler_lock(uint32_t core_id);
 

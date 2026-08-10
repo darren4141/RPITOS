@@ -6,7 +6,7 @@ Three tasks contend on a single inheritance-enabled mutex:
 
 | Task | Priority | Behaviour |
 |---|---|---|
-| LOW | 1 | Acquires the mutex and busy-spins for 300 ms |
+| LOW | 1 | Acquires the mutex and busy-spins for 2000 ms |
 | MID | 2 | Never touches the mutex; prints a tick every 50 ms |
 | HIGH | 3 | Sleeps 100 ms, then blocks on the same mutex |
 
@@ -21,7 +21,7 @@ every tick.
 ## Expected output with inheritance ON
 
 ```
-[    0] LOW : acquired (priority=1 base=1) — starting 300 ms work
+[    0] LOW : acquired (priority=1 base=1) — starting 2000 ms work
 [    0] MID : tick 1   <-- MID runs; LOW is only priority 1
 [   50] MID : tick 2
 [  100] HIGH: blocking on mutex — LOW should be boosted to 3 now
@@ -29,12 +29,12 @@ every tick.
          *** MID goes silent — can't preempt LOW at priority 3 ***
 [  150] LOW : working... (priority=3 base=1)
 [  200] LOW : working... (priority=3 base=1)
-[  250] LOW : working... (priority=3 base=1)
-[  300] LOW : releasing  (priority=3 base=1)
-[  300] HIGH: acquired mutex ✓
-[  300] LOW : released   (priority=1 base=1)  <-- restored
-[  300] MID : tick 3    <-- MID resumes
-[  350] MID : tick 4
+...
+[ 1950] LOW : working... (priority=3 base=1)
+[ 2000] LOW : releasing  (priority=3 base=1)
+[ 2000] HIGH: acquired mutex ✓
+[ 2000] LOW : released   (priority=1 base=1)  <-- restored
+[ 2000] MID : tick ...   <-- MID resumes
 ...
 ```
 

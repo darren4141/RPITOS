@@ -18,10 +18,24 @@ the mutex/semaphore/queue workload:
   does. Demonstrates a give on one core correctly waking a task parked on a
   *different* core's scheduler.
 - **Queue** (`g_msg_queue`) — core 2's `queue_send_task` sends an
-  incrementing message every 400 ms; core 0's `queue_recv_task` blocks on
+  incrementing message every 150 ms; core 0's `queue_recv_task` blocks on
   `queue_recv()` and wakes the instant one arrives. Same cross-core wake
   property as the semaphore, plus the actual data copy through the shared
   buffer.
+- **Handshake** (`g_data_ready_sem` / `g_processing_done_sem`) — a
+  round-trip producer/consumer between core 1 (`handshake_producer_task`)
+  and core 2 (`handshake_consumer_task`), unlike `g_ping_sem`'s
+  one-directional fire-and-forget. Core 1 "produces" (busy work, ~700 ms),
+  gives `g_data_ready_sem`, then blocks on `g_processing_done_sem`; core 2
+  blocks on `g_data_ready_sem`, "processes" (busy work, ~1800 ms —
+  deliberately longer than the producer's), then gives the ack back. Strict
+  alternation: while one side works, the other is always blocked.
+- **Grind** (`grind_task`, one per app core 0-2) — a CPU-bound filler that
+  busy-spins ~50 ms then delays 15 ms, keeping each core genuinely busy
+  between the lighter-weight demo tasks' delays so contention/idle-time
+  shows up on the telemetry dashboard instead of everything finishing
+  near-instantly. Runs at the lowest app priority so it never delays
+  ping/pong/queue/handshake traffic.
 - **Telemetry** (core 3, `RTOS_TELEMETRY`) — `telemetry_publisher_task` is
   the *only* task on this core. It frames and sends a `PKT_HEARTBEAT` packet
   at 10 Hz using the wire format from `md/client/transport_protocol.md`
@@ -38,9 +52,9 @@ the mutex/semaphore/queue workload:
 
 | Core | Behaviour |
 |---|---|
-| 0 | `mutex_counter_task` + `ping_task` (gives the semaphore every 500 ms) + `queue_recv_task` (blocks on the queue) |
-| 1 | `mutex_counter_task` + `pong_task` (blocks on the semaphore) |
-| 2 | `mutex_counter_task` + `queue_send_task` (sends every 400 ms) |
+| 0 | `mutex_counter_task` + `ping_task` (gives the semaphore every 500 ms) + `queue_recv_task` (blocks on the queue) + `grind_task` |
+| 1 | `mutex_counter_task` + `pong_task` (blocks on the semaphore) + `handshake_producer_task` + `grind_task` |
+| 2 | `mutex_counter_task` + `queue_send_task` (sends every 150 ms) + `handshake_consumer_task` + `grind_task` |
 | 3 | `telemetry_publisher_task` only — dedicated, no RTOS-under-test tasks |
 
 All four cores also print via the single shared UART — see `uart/docs.md`'s

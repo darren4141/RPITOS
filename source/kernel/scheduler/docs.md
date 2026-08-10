@@ -15,6 +15,38 @@ pull in `software_timer.o`/`dfu_trigger.o`. If a sample links the real
 `software_timer.c`/`dfu_trigger.c`, the strong definition there overrides
 the weak one automatically at link time.
 
+## Locking model
+
+Each core has its own `Spinlock` (`SchedulerCore.lock`) guarding that core's
+own ready/blocked lists — not one global lock, so routine ticking on core N
+never contends core M's. A task's `core_id` never changes (no task
+migration), so every scheduler operation only ever needs exactly one core's
+lock.
+
+`scheduler_lock(core_id)`/`scheduler_unlock(core_id)` take the core id
+explicitly rather than always operating on the caller's own core, because
+callers fall into two groups:
+- same-core callers (`scheduler_switch_context`, `timer_tick_handler`,
+  `task_create`, `block_until`) pass `companion_core_id()`.
+- cross-core callers (`semaphore_give`, `mutex_unlock`,
+  `scheduler_change_task_priority`) pass the *target* task's `tcb->core_id`
+  — this is what lets a wake-up issued on one core correctly move a task
+  that belongs to a different core's scheduler.
+
+`scheduler_add_to_ready_list()`/`scheduler_remove_from_ready_list()`/
+`scheduler_add_to_blocked_list()`/`scheduler_remove_from_blocked_list()`/
+`scheduler_change_task_priority()` do not take the lock themselves — the
+caller must already hold `scheduler_lock(tcb->core_id)` around them.
+
+**Lock order (never reversed):** `enter_critical()` (if same-core IRQ
+preemption safety is also needed) → a `Semaphore`/`Mutex`'s own lock → the
+target core's `scheduler_lock()`. Taking a `scheduler_lock()` and then a
+sync object's lock, on two different cores, is the classic way to deadlock
+them against each other — see `spinlock/docs.md`.
+
+Never hold `scheduler_lock()` across a blocking wait (a spin-on-task-state
+loop) — acquire/release around each short list-touching step instead.
+
 ## Stack watermark check
 
 `scheduler_switch_context()` checks `stack_base[0] == TASK_WATERMARK` for

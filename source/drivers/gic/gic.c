@@ -17,14 +17,7 @@
 
 #define CORE_TIMER_IRQCNTL(n) (*(volatile uint32_t *)(ARM_LOCAL_BASE + 0x40 + (n) * 4))
 
-// ARM Local per-core mailboxes — a separate, non-GIC signal used for
-// companion-core IPIs (see companion_core_soft_reset_plan.md's "Why mailbox,
-// not SGI": GICD_IGROUPR is confirmed write-ignored from this Non-secure-only
-// OS, so GIC SGIs can never be delivered here; these bypass the GIC entirely,
-// same reasoning as CORE_TIMER_IRQCNTL above). Mailbox 0 specifically —
-// matches Linux's own convention for IPIs; mailbox 3 is already used by the
-// boot ROM/bootstrap's one-time secondary-core release kick (see
-// bootstrap/startup.s), 1 and 2 are unused by anything in this codebase.
+// ARM Local per-core mailboxes — companion-core IPI signal, bypasses GIC entirely (see docs.md)
 #define CORE_MBOX_IRQCNTL(n)  (*(volatile uint32_t *)(ARM_LOCAL_BASE + 0x50 + (n) * 4))
 #define CORE_MBOX0_SET(n)     (*(volatile uint32_t *)(ARM_LOCAL_BASE + 0x80 + (n) * 0x10))
 
@@ -67,10 +60,7 @@ void gic_percore_init(void)
   // docs.md for why.
   CORE_TIMER_IRQCNTL(companion_core_id()) |= (1 << 1);   // nCNTPNSIRQ → this core's IRQ
 
-  // 6. Enable this core's ARM Local mailbox 0 IRQ — the companion-core IPI
-  // signal (see the CORE_MBOX_IRQCNTL comment above). Bit 0 of this register
-  // is mailbox 0's IRQ enable (bits [3:0] = mailboxes 0-3, mirroring
-  // CORE_TIMER_IRQCNTL's IRQ/FIQ split above).
+  // 6. Enable this core's ARM Local mailbox 0 IRQ — the companion-core IPI signal (see docs.md)
   CORE_MBOX_IRQCNTL(companion_core_id()) |= (1U << 0);
 
   __asm__ volatile ("dsb sy" ::: "memory");
@@ -105,11 +95,7 @@ void gic_enable_spi(uint32_t intid, uint8_t priority)
 
 void gic_send_mailbox_ipi(uint32_t target_core)
 {
-  // Any nonzero value triggers the target core's mailbox 0 IRQ; the value
-  // itself carries no meaning here (this mailbox is reserved for a single
-  // purpose — see the CORE_MBOX_IRQCNTL comment). Cleared by the receiving
-  // core reading its own Mailbox 0 RDCLR register (startup.s's
-  // _irq_handler) — reading it clears it, there's no separate write-to-clear.
+  // Any nonzero value triggers the target core's mailbox 0 IRQ; value carries no meaning (see docs.md)
   CORE_MBOX0_SET(target_core) = 1U;
 
   __asm__ volatile ("dsb sy" ::: "memory");

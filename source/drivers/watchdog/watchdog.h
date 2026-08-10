@@ -40,6 +40,18 @@ typedef enum {
 // See docs.md for the A/B trial-boot mechanism this bounds.
 #define APP_SLOT_TRIAL_MAX_ATTEMPTS 3U
 
+// Pass to watchdog_init()'s `tolerance` to disable the reset-tolerance policy
+// (infinite retries, policy never fires). NOTE: 0 is NOT "never" — the
+// bootloader check is `wdt_reset_count > tolerance`, so tolerance=0 trips the
+// policy on the very first WDT reset. Only a negative tolerance disables it.
+#define WATCHDOG_RESET_TOLERANCE_INFINITE (-1)
+
+// Pass to watchdog_init()'s `confirm_delay_ms` to skip arming the confirm-slot
+// timer entirely — the app is responsible for calling wdt_meta_confirm_slot()
+// itself once it judges its own state healthy, instead of a fixed timeout
+// confirming for it. No effect in WATCHDOG_MINIMAL builds (bootloader).
+#define WATCHDOG_CONFIRM_MANUAL (-1)
+
 typedef struct {
   uint32_t magic;
   uint32_t wdt_reset_count;
@@ -80,10 +92,17 @@ bool watchdog_was_wdt_reset(void);
 
 /**
  * @brief Arm the watchdog with a [1, 15] second timeout (clamped).
- * @note After `tolerance` watchdog resets the bootloader applies `policy`. A
- * negative tolerance means the policy never fires (infinite retries).
+ * @note The bootloader applies `policy` once `wdt_reset_count > tolerance`.
+ * A negative tolerance (see WATCHDOG_RESET_TOLERANCE_INFINITE) means the
+ * policy never fires. tolerance=0 is the strictest setting, not "never" —
+ * it trips on the very first WDT reset.
+ * @note `confirm_delay_ms` sets how long after watchdog_task_start() the
+ * confirm-slot timer waits before confirming the active app slot (see
+ * WATCHDOG_CONFIRM_MANUAL to disable it and confirm manually instead). No
+ * effect in WATCHDOG_MINIMAL builds.
  */
-StatusCode watchdog_init(uint32_t timeout_s, WatchdogResetPolicy policy, int32_t tolerance);
+StatusCode watchdog_init(uint32_t timeout_s, WatchdogResetPolicy policy, int32_t tolerance,
+                          int64_t confirm_delay_ms);
 
 /**
  * @brief Reset the countdown. Safe to call from any context — a single 32-bit MMIO write is atomic on Cortex-A72.
@@ -105,14 +124,11 @@ void watchdog_trigger_reset(void);
 #ifndef WATCHDOG_MINIMAL
 
 /**
- * @brief Arm the periodic watchdog-kick timer and the confirm-slot timer/task.
+ * @brief Arm the periodic watchdog-kick timer and the confirm-slot timer/task
+ * (the latter only if watchdog_init() was called with a non-negative
+ * confirm_delay_ms).
  */
 StatusCode watchdog_task_start(void);
-
-/**
- * @brief Change how long after boot the confirm-slot check considers the app unconfirmed.
- */
-StatusCode watchdog_set_confirm_slot_timing(uint64_t new_time_ms);
 #endif
 
 #endif

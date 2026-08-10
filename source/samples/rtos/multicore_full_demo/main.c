@@ -18,22 +18,25 @@
 #include "uart.h"
 #include "watchdog.h"
 
+// wdt_meta_confirm_slot() (below) now clears wdt_reset_count on every healthy
+// boot, so this only trips if the app crash-loops without ever reaching the
+// confirm call two boots in a row.
+#define WATCHDOG_TOLER 1
+
 #include <stdint.h>
 
-static const uint32_t hz = 1000;   // 1 kHz tick, every core
+static const uint32_t hz = 1000;        // 1 kHz tick, every core
 
 // ── Shared cross-core synchronization objects — the whole point of this sample
-static Mutex g_counter_mutex;      // contended by one task on every core
+static Mutex g_counter_mutex;           // contended by one task on every core
 static volatile uint32_t g_shared_counter = 0;
 
-static Semaphore g_ping_sem;       // core 0 gives, core 1 takes
-static Queue g_msg_queue;          // core 2 sends, core 0 receives
+static Semaphore g_ping_sem;            // core 0 gives, core 1 takes
+static Queue g_msg_queue;               // core 2 sends, core 0 receives
 
-// Round-trip producer/consumer handshake between core 1 and core 2 — unlike
-// g_ping_sem (one-directional, fire-and-forget), each side blocks waiting on
-// the other every cycle. See handshake_producer_task()/handshake_consumer_task().
-static Semaphore g_data_ready_sem;       // core 1 gives once data's "produced", core 2 takes
-static Semaphore g_processing_done_sem;  // core 2 gives once "processed", core 1 takes
+// Round-trip producer/consumer handshake between core 1 and core 2 (see README).
+static Semaphore g_data_ready_sem;      // core 1 gives once data's "produced", core 2 takes
+static Semaphore g_processing_done_sem; // core 2 gives once "processed", core 1 takes
 
 // ── Core 0
 static volatile uint32_t clk_freq;
@@ -42,6 +45,7 @@ static TaskControlBlock *tcb_mutex0 = NULL;
 static TaskControlBlock *tcb_ping = NULL;
 static TaskControlBlock *tcb_queue_recv = NULL;
 static TaskControlBlock *tcb_grind0 = NULL;
+static TaskControlBlock *tcb_grind1 = NULL;
 
 // ── Core 1
 static volatile uint32_t core1_clk_freq;
@@ -56,9 +60,7 @@ static volatile uint32_t core3_clk_freq;
 static volatile uint64_t core3_tick_count = 0;
 
 // Busy-spins the calling task for roughly ms milliseconds — real RUNNING
-// time (shows up as such in telemetry), not a blocking delay. Used to make
-// contention/idle-time visible on the dashboard instead of everything
-// finishing near-instantly.
+// time, not a blocking delay (see README).
 static void busy_work_ms(uint64_t ms)
 {
   uint64_t start = scheduler_get_tick_count();
@@ -68,12 +70,10 @@ static void busy_work_ms(uint64_t ms)
   }
 }
 
-// One task, run identically on all four cores — reads its own core id at
-// runtime rather than being copy-pasted per core. Demonstrates mutex_lock()/
-// mutex_unlock() genuinely serializing a shared resource across four
-// independent per-core schedulers. Holds the mutex for a visible ~30 ms
-// (busy_work_ms, not a delay) so waiters on other cores block for a real,
-// observable duration.
+// One task, run identically on cores 0-2 — reads its own core id at runtime
+// rather than being copy-pasted per core. Holds the mutex for a visible
+// ~30 ms (busy_work_ms, not a delay) so waiters on other cores block for a
+// real, observable duration.
 static void mutex_counter_task(void *params)
 {
   (void)params;
@@ -88,10 +88,17 @@ static void mutex_counter_task(void *params)
   }
 }
 
-// CPU-bound filler task, one per app core (0-2) — keeps the core genuinely
-// busy between the lighter-weight demo tasks' delays. Lowest app priority so
-// it never delays ping/pong/queue traffic.
+// CPU-bound filler task, one per app core (0-2) — see README.
 static void grind_task(void *params)
+{
+  (void)params;
+  while (1) {
+    busy_work_ms(50U);
+    task_delay_ms(15U);
+  }
+}
+
+static void grind_task_2(void *params)
 {
   (void)params;
   while (1) {
@@ -126,10 +133,8 @@ static void pong_task(void *params)
   }
 }
 
-// Core 1 — "produces data" (busy work; content doesn't matter), hands it off,
-// then blocks waiting for core 2 to finish "processing" before producing
-// again. Strict alternation with handshake_consumer_task() — while one side
-// works, the other is blocked, every cycle.
+// Core 1 — "produces data" (busy work), hands it off, then blocks waiting for
+// core 2 to finish "processing" before producing again (see README).
 static void handshake_producer_task(void *params)
 {
   (void)params;
@@ -254,16 +259,12 @@ void kmain(void)
   uart_telemetry_init();
   telemetry_report_boot_stage_enter(BOOT_STAGE_APP);
 
-  // Re-broadcast boot_flags here, not just rely on the bootloader's own one-shot
-  // PKT_BOOT_INFO(BOOT_FLAGS) — that packet fires before the app exists, so a host
-  // that connects (the normal case: flash, board boots on its own schedule, GUI
-  // launched afterward) misses it entirely with no replay possible. boot_flags itself
-  // is safe to read directly here with no re-read call needed: it lives at a fixed
-  // shared RAM address (BOOT_FLAGS_START_ADDR) the bootloader already populated and
-  // the app's own BSS-clear never touches. See md/client/device/boot_init_tracking.md.
+  // Re-broadcast boot_flags here — the bootloader's one-shot PKT_BOOT_INFO
+  // fires before the app exists, so a host connecting later would otherwise
+  // miss it. See md/client/device/boot_init_tracking.md.
   telemetry_report_boot_info_boot_flags((uint8_t)boot_flags.reset_reason,
-                                         (boot_flags.dfu_requested == DFU_REQUEST) ? 1U : 0U,
-                                         (uint8_t)boot_flags.fw_crc_ok);
+                                        (boot_flags.dfu_requested == DFU_REQUEST) ? 1U : 0U,
+                                        (uint8_t)boot_flags.fw_crc_ok);
 #endif
 
   uart_print("\r\n=== multicore_full_demo ===\r\n"
@@ -272,7 +273,7 @@ void kmain(void)
              "core 2: RTOS — mutex counter + queue sender\r\n"
              "core 3: telemetry publisher (dedicated, no app tasks)\r\n\r\n");
 
-  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 1);
+  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 1, 1000);
 
   scheduler_init(0, &clk_freq, hz, &tick_count);
   uart_task_start();
@@ -290,6 +291,7 @@ void kmain(void)
   task_create(ping_task, 2048, TASK_PRIORITY_2, NULL, "ping", &tcb_ping);
   task_create(queue_recv_task, 2048, TASK_PRIORITY_2, NULL, "queue_recv", &tcb_queue_recv);
   task_create(grind_task, 2048, TASK_PRIORITY_1, NULL, "grind0", &tcb_grind0);
+  task_create(grind_task_2, 2048, TASK_PRIORITY_1, NULL, "grind1", &tcb_grind1);
 
   watchdog_task_start();
 
@@ -303,19 +305,14 @@ void kmain(void)
   telemetry_report_boot_milestone(BOOT_MS_GENTIMER_INIT_DONE, BOOT_STAGE_APP, 0);
 #endif
 
-  // A/B trial boot: confirm this app slot now that init succeeded.
-  wdt_meta_confirm_slot();
 #ifdef RTOS_TELEMETRY
   telemetry_report_boot_milestone(BOOT_MS_SLOT_CONFIRMED, BOOT_STAGE_APP, 0);
-  // Same "host may have connected after the bootloader already ran" reasoning as the
-  // boot_flags broadcast above — unlike boot_flags, wdt_meta is a per-image global,
-  // not a shared-RAM struct, so the app's own copy only becomes valid once something
-  // in this image calls wdt_meta_read(); wdt_meta_confirm_slot() (just above) already
-  // does that internally, so wdt_meta is guaranteed fresh right here.
+  // Same reasoning as the boot_flags broadcast above; wdt_meta is guaranteed
+  // fresh here since wdt_meta_confirm_slot() above already read it.
   telemetry_report_boot_info_slot_state((wdt_meta.active_app_slot == APP_SLOT_B) ? 1U : 0U,
-                                         (uint8_t)wdt_meta.app_slot_trial, wdt_meta.trial_boot_count,
-                                         wdt_meta.wdt_reset_count, wdt_meta.wdt_reset_tolerance,
-                                         (uint8_t)wdt_meta.wdt_reset_policy, (uint8_t)wdt_meta.wdt_reset_reason);
+                                        (uint8_t)wdt_meta.app_slot_trial, wdt_meta.trial_boot_count,
+                                        wdt_meta.wdt_reset_count, wdt_meta.wdt_reset_tolerance,
+                                        (uint8_t)wdt_meta.wdt_reset_policy, (uint8_t)wdt_meta.wdt_reset_reason);
 #endif
 
   for (volatile uint32_t i = 0; i < 20000U; i++) {

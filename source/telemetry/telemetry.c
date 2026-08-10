@@ -4,10 +4,10 @@
 #include <stddef.h>
 
 #include "companion_core.h"
+#include "interrupts.h"
 #include "scheduler.h"
 #include "spinlock.h"
 #include "telemetry_frame.h"
-#include "uart.h"
 
 // Guards every call into telemetry_send_framed() (telemetry_frame.c), from
 // every entry point in this file. Zero-initialized by BSS — already
@@ -70,14 +70,25 @@ void telemetry_report_task_unblocked(uint16_t task_id, uint32_t core_id)
 }
 
 // ── Sync primitive tracking (mutex/semaphore/queue) ─────────────────────────
+// See docs.md.
 
-// Assigns sync_ids in creation order, across every kind (a mutex, a semaphore, and
-// a queue's two internal semaphores all draw from the same counter) — mirrors
-// task_id assignment's spirit, just simpler since there's no per-core scoping
-// question here (a sync object isn't owned by any one core). Guarded by
-// telemetry_lock, same as the send itself, so allocate+broadcast is atomic —
-// two racing registrations can never observe/send the same id.
+// Shared counter across all sync kinds; guarded by telemetry_lock so
+// allocate+broadcast is atomic.
 static uint16_t next_sync_id = 0;
+
+// Roster for telemetry_rebroadcast_sync_roster(). Write-once per slot, so
+// it can be read without telemetry_lock once sync_registry_count has been
+// snapshotted under the lock.
+typedef struct {
+  TelemetrySyncKind kind;
+  uint16_t sync_id;
+  uint16_t parent_sync_id;
+  uint8_t name_len;
+  char name[TELEMETRY_SYNC_NAME_MAX];
+} TelemetrySyncRegistryEntry;
+
+static TelemetrySyncRegistryEntry sync_registry[TELEMETRY_MAX_SYNC_OBJECTS];
+static uint16_t sync_registry_count = 0;
 
 uint16_t telemetry_register_sync(TelemetrySyncKind kind, uint16_t parent_sync_id, const char *name)
 {
@@ -99,10 +110,61 @@ uint16_t telemetry_register_sync(TelemetrySyncKind kind, uint16_t parent_sync_id
     name_len++;
   }
 
+  // Registry storage past TELEMETRY_MAX_SYNC_OBJECTS is silently dropped — the
+  // one-shot broadcast above still goes out either way; only the later
+  // re-announcement is affected for any entries beyond the cap.
+  if (sync_registry_count < TELEMETRY_MAX_SYNC_OBJECTS) {
+    TelemetrySyncRegistryEntry *entry = &sync_registry[sync_registry_count];
+    entry->kind = kind;
+    entry->sync_id = sync_id;
+    entry->parent_sync_id = parent_sync_id;
+    entry->name_len = name_len;
+    for (uint8_t i = 0; i < name_len; i++) {
+      entry->name[i] = name[i];
+    }
+    sync_registry_count++;   // bumped only after the entry is fully written
+  }
+
   telemetry_send_framed(PKT_SYNC_CREATED, payload, (uint8_t)(5 + name_len));
   spinlock_release(&telemetry_lock);
 
   return sync_id;
+}
+
+void telemetry_rebroadcast_sync_roster(void)
+{
+  spinlock_acquire(&telemetry_lock);
+  uint16_t count = sync_registry_count;
+  spinlock_release(&telemetry_lock);
+
+  for (uint16_t i = 0; i < count; i++) {
+    // Safe to read without the lock: entries are write-once, and every index below
+    // `count` was already fully written before sync_registry_count was bumped past
+    // it (see telemetry_register_sync()).
+    const TelemetrySyncRegistryEntry *entry = &sync_registry[i];
+
+    uint8_t payload[5 + TELEMETRY_SYNC_NAME_MAX];
+    payload[0] = (uint8_t)entry->kind;
+    payload[1] = (uint8_t)(entry->sync_id >> 8);
+    payload[2] = (uint8_t)(entry->sync_id & 0xFFU);
+    payload[3] = (uint8_t)(entry->parent_sync_id >> 8);
+    payload[4] = (uint8_t)(entry->parent_sync_id & 0xFFU);
+    for (uint8_t j = 0; j < entry->name_len; j++) {
+      payload[5 + j] = (uint8_t)entry->name[j];
+    }
+
+    // Masks IRQs so this core's own timer tick can't splice into an
+    // in-flight frame mid-send — see docs.md.
+    uint32_t cpsr = enter_critical();
+    spinlock_acquire(&telemetry_lock);
+    telemetry_send_framed(PKT_SYNC_CREATED, payload, (uint8_t)(5 + entry->name_len));
+    spinlock_release(&telemetry_lock);
+    exit_critical(cpsr);
+
+    // Drains here instead of task_delay_ms(1) between frames — a delay
+    // starved the ring drain long enough to overflow it. See docs.md.
+    telemetry_drain_tick_rings();
+  }
 }
 
 void telemetry_report_mutex_owner_changed(uint16_t sync_id, uint8_t has_owner, uint16_t owner_task_id, uint32_t owner_core_id)
@@ -121,11 +183,8 @@ void telemetry_report_mutex_owner_changed(uint16_t sync_id, uint8_t has_owner, u
 }
 
 // ── Boot / DFU tracking (locked wrappers — app side) ────────────────────────
-// The app only ever calls the stage/milestone/slot-confirmed subset of these
-// (from main.c, scheduler.c, companion_core.c — none of them dfu_receive.c,
-// which never links into an app build). The BOOT_INFO/DFU_EVENT wrappers are
-// still defined here for API symmetry with telemetry_boot.c, even though
-// nothing in a normal app build calls them today.
+// Defined here for API symmetry with telemetry_boot.c, though the app only
+// calls the stage/milestone/slot-confirmed subset today. See docs.md.
 
 void telemetry_report_boot_stage_enter(TelemetryBootStage stage)
 {
@@ -325,6 +384,18 @@ void telemetry_publisher_task(void *params)
       telemetry_send(PKT_HEARTBEAT, payload, sizeof(payload));
       heartbeat_counter++;
     }
+
+    // Re-announce the sync-object roster every ~2s (2000 iterations at ~1ms/iteration)
+    // — see telemetry_rebroadcast_sync_roster()'s doc comment for why the one-shot
+    // send from telemetry_register_sync() alone isn't reliable enough on its own.
+    // Rare enough not to matter bandwidth-wise (a handful of small packets every
+    // couple seconds); frequent enough that a viewer is never stuck waiting long for
+    // the roster to resolve after attaching late or losing the first attempt to
+    // reset-transient line noise.
+    if ((loop_counter % 2000U) == 0U) {
+      telemetry_rebroadcast_sync_roster();
+    }
+
     loop_counter++;
 
     task_delay_ms(1U);

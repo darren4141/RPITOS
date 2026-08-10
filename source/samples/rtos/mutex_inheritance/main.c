@@ -144,7 +144,7 @@ void kmain(void)
   software_timer_init();
   software_timer_start();
 
-  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
+  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2, 1000);
   watchdog_task_start();
 
   gic_distributor_init();

@@ -25,8 +25,7 @@ static TaskControlBlock *tcb_low = NULL;
 static TaskControlBlock *tcb_mid = NULL;
 static TaskControlBlock *tcb_high = NULL;
 
-// LOW (priority 1): holds the mutex and busy-spins, printing its live priority
-// every PRINT_MS ms so the boost from HIGH is visible in the output.
+// LOW (priority 1): busy-spins for HOLD_MS printing a counter every PRINT_MS.
 void low_task(void *params)
 {
   (void)params;
@@ -54,9 +53,7 @@ void low_task(void *params)
   }
 }
 
-// MID (priority 2): prints a tick every 50 ms and never touches the mutex.
-// These prints go silent during the window where HIGH is blocked and LOW is
-// boosted above MID.
+// MID (priority 2): prints a tick every 50 ms.
 void mid_task(void *params)
 {
   task_delay_ms(2000);
@@ -71,8 +68,7 @@ void mid_task(void *params)
   }
 }
 
-// HIGH (priority 3): sleeps 100 ms so LOW can acquire the mutex first, then
-// contends on it.  The moment HIGH blocks, mutex_lock boosts LOW to priority 3.
+// HIGH (priority 3): prints every 1300 ms.
 void high_task(void *params)
 {
   (void)params;
@@ -111,7 +107,7 @@ void kmain(void)
   software_timer_init();
   software_timer_start();
 
-  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
+  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2, 1000);
   watchdog_task_start();
 
   gic_distributor_init();

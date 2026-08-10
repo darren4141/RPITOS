@@ -175,8 +175,7 @@ void kmain(void)
   software_timer_init();
   software_timer_start();
 
-  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 3);
-  watchdog_set_confirm_slot_timing(2000);
+  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 3, 1000);
   watchdog_task_start();
 
   __asm__ volatile ("cpsie i" ::: "memory");

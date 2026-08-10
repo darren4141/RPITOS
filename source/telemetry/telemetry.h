@@ -36,6 +36,10 @@ typedef enum {
 #define TELEMETRY_SYNC_NAME_MAX 16U
 #define TELEMETRY_SYNC_ID_NONE  0xFFFFU   // parent_sync_id "no parent" / owner_task_id unused when has_owner=0
 
+// Bound on how many sync objects telemetry_register_sync() remembers for
+// re-announcement. multicore_full_demo registers 12 today; see docs.md.
+#define TELEMETRY_MAX_SYNC_OBJECTS 16U
+
 typedef enum {
   SYNC_KIND_MUTEX     = 0,
   SYNC_KIND_SEMAPHORE = 1,
@@ -96,10 +100,9 @@ typedef enum {
   BOOT_INFO_BOOT_FLAGS = 2,
 } TelemetryBootInfoSubtype;
 
-// Which image a PKT_DFU_EVENT concerns — a self-update (CMD_START_SELF_UPDATE,
-// writes the bootloader's own eMMC slot and ends in a forced watchdog reset) is
-// a materially different flow from a normal app flash, so the host needs to
-// tell them apart rather than assuming every DFU session is an app update.
+// Which image a PKT_DFU_EVENT concerns — a self-update (CMD_START_SELF_UPDATE)
+// writes the bootloader's own eMMC slot, a materially different flow from a
+// normal app flash.
 typedef enum {
   DFU_TARGET_APP        = 0,
   DFU_TARGET_BOOTLOADER = 1,      // CMD_START_SELF_UPDATE
@@ -174,13 +177,20 @@ void telemetry_report_task_blocked(uint16_t task_id, uint32_t core_id, Telemetry
 void telemetry_report_task_unblocked(uint16_t task_id, uint32_t core_id);
 
 /**
- * @brief Register a sync object (mutex/semaphore/queue) and broadcast its identity once, at creation time.
+ * @brief Register a sync object (mutex/semaphore/queue), broadcast its identity immediately, and remember it for later re-announcement (see telemetry_rebroadcast_sync_roster()).
  * @param parent_sync_id TELEMETRY_SYNC_ID_NONE, or another object's sync_id — used by queue_init() to link its two internal semaphores back to the queue that owns them.
- * @param name May be NULL (reported with a zero-length name field); truncated to TELEMETRY_SYNC_NAME_MAX bytes if longer. Only read for the duration of this call, never stored — same pattern as telemetry_report_task_created()'s name param.
+ * @param name May be NULL (reported with a zero-length name field); truncated to TELEMETRY_SYNC_NAME_MAX bytes if longer. Copied into the registry (unlike telemetry_report_task_created()'s name, which is never stored) so it can be re-sent later — safe here since the registry is small and bounded, not per-task-control-block state.
  * @return The assigned sync_id — store it on the object (e.g. mtx->sync_id) for later telemetry_report_task_blocked()/telemetry_report_mutex_owner_changed() calls.
  * @note Safe to call from any core. Caller must mask IRQs (enter_critical()) unless already running with IRQs masked — same requirement as telemetry_report_task_created().
  */
 uint16_t telemetry_register_sync(TelemetrySyncKind kind, uint16_t parent_sync_id, const char *name);
+
+/**
+ * @brief Re-send PKT_SYNC_CREATED for every sync object registered so far this boot.
+ * @note PKT_SYNC_CREATED is otherwise a one-shot broadcast with no replay — real hardware testing found the initial send can be lost either to a host that wasn't listening yet or to framing corruption during the power-up/reset transient (the CRC check correctly rejects the corrupted frame; the data just never arrives). Call periodically (see telemetry_publisher_task()) so the roster becomes eventually consistent regardless of why the first attempt was lost. Idempotent on the host side — re-inserting the same sync_id with the same fields is a no-op there.
+ * @note Call from the telemetry-publisher core only (same as telemetry_publisher_task() itself) — not IRQ-safe, does real work (a loop + UART writes) per call.
+ */
+void telemetry_rebroadcast_sync_roster(void);
 
 /**
  * @brief Report a mutex's ownership changing. Call from mutex_lock() (immediate acquire) and mutex_unlock() (release to none, or handoff to the next owner).
@@ -189,11 +199,8 @@ uint16_t telemetry_register_sync(TelemetrySyncKind kind, uint16_t parent_sync_id
 void telemetry_report_mutex_owner_changed(uint16_t sync_id, uint8_t has_owner, uint16_t owner_task_id, uint32_t owner_core_id);
 
 // ── Boot / DFU tracking ─────────────────────────────────────────────────────
-// Declared here unconditionally (under RTOS_TELEMETRY); defined either by
-// telemetry_boot.c (bootstrap/bootloader — unlocked, single-threaded, no RTOS)
-// or by telemetry.c (app — locked, same telemetry_lock as every other
-// multi-core-callable report). Exactly one of the two is ever linked into a
-// given sample (see Makefile), so there is never a duplicate-symbol risk.
+// Defined by telemetry_boot.c (bootstrap/bootloader, unlocked) or telemetry.c
+// (app, locked) — exactly one links per sample. See docs.md.
 
 /**
  * @brief Report entry into a boot stage (bootstrap/bootloader/app). Call once, right after uart_telemetry_init().

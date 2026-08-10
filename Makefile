@@ -42,7 +42,9 @@ SAMPLE_TELEMETRY    :=
 SAMPLE_TELEMETRY_BOOT :=
 include $(SAMPLE_DIR)/config.mk
 
-CFLAGS  := $(CFLAGS_BASE) $(SAMPLE_EXTRA_CFLAGS) -I$(SAMPLE_DIR)
+# -MMD -MP: per-object header dependency tracking, so header-only changes
+# trigger rebuilds too — see Makefile.md.
+CFLAGS  := $(CFLAGS_BASE) $(SAMPLE_EXTRA_CFLAGS) -I$(SAMPLE_DIR) -MMD -MP
 LIBGCC  := $(shell $(ARMGNU)-gcc $(CFLAGS_BASE) -print-libgcc-file-name)
 LINKER  := $(SAMPLE_DIR)/$(SAMPLE_NAME).ld
 
@@ -117,6 +119,11 @@ $(SAMPLE_OBJ)/telemetry_boot.o: source/telemetry/telemetry_boot.c | $(SAMPLE_OBJ
 
 $(SAMPLE_OUT):
 	mkdir -p $@
+
+# Pull in the .d files -MMD -MP generated on the previous build, if any exist yet
+# (the leading '-' silences the "no such file" case on a clean tree) — this is what
+# actually makes the header-dependency tracking above take effect.
+-include $(SAMPLE_OBJECTS:.o=.d)
 
 $(SAMPLE_OBJ):
 	mkdir -p $@
