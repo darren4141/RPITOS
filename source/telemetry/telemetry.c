@@ -1,60 +1,22 @@
 #include "telemetry.h"
 
 #ifdef RTOS_TELEMETRY
+#include <stddef.h>
 
 #include "companion_core.h"
-#include "crc.h"
+#include "interrupts.h"
 #include "scheduler.h"
 #include "spinlock.h"
-#include "uart.h"
+#include "telemetry_frame.h"
 
-static uint8_t seq_counters[NUM_TELEMETRY_PACKET_TYPES] = { 0 };
-
-// Guards every call into telemetry_send_framed(), from every entry point.
-// Zero-initialized by BSS — already unlocked, no explicit init needed.
+// Guards every call into telemetry_send_framed() (telemetry_frame.c), from
+// every entry point in this file. Zero-initialized by BSS — already
+// unlocked, no explicit init needed.
 static Spinlock telemetry_lock;
-
-// Actual framing + CRC + UART write. Never call directly — every caller goes
-// through telemetry_send() or a telemetry_report_*() wrapper, all of which
-// hold telemetry_lock around this call.
-static void telemetry_send_framed(TelemetryPacketType type, const uint8_t *payload, uint8_t len)
-{
-  uint8_t header[5];
-  header[0] = TELEMETRY_MAGIC;
-  header[1] = (uint8_t)type;
-  header[2] = seq_counters[type]++;
-  header[3] = 0U;    // LEN_MSB — len is a uint8_t, so this byte is always 0
-  header[4] = len;   // LEN_LSB
-
-  CRC32 ctx;
-  crc32_start(&ctx);
-  crc32_update(&ctx, header, sizeof(header));
-  if (len > 0) {
-    crc32_update(&ctx, payload, len);
-  }
-  uint32_t crc = crc32_finish(&ctx);
-
-  for (uint8_t i = 0; i < sizeof(header); i++) {
-    uart_telemetry_tx_raw(header[i]);
-  }
-  for (uint8_t i = 0; i < len; i++) {
-    uart_telemetry_tx_raw(payload[i]);
-  }
-
-  uart_telemetry_tx_raw((uint8_t)(crc & 0xFFU));           // CRC32 LE
-  uart_telemetry_tx_raw((uint8_t)((crc >> 8) & 0xFFU));
-  uart_telemetry_tx_raw((uint8_t)((crc >> 16) & 0xFFU));
-  uart_telemetry_tx_raw((uint8_t)((crc >> 24) & 0xFFU));
-
-  uart_telemetry_tx_raw(TELEMETRY_TRAILER);
-}
 
 void telemetry_send(TelemetryPacketType type, const uint8_t *payload, uint8_t len)
 {
-  if (type >= NUM_TELEMETRY_PACKET_TYPES) {
-    return;
-  }
-
+  // telemetry_send_framed() (telemetry_frame.c) itself validates type.
   spinlock_acquire(&telemetry_lock);
   telemetry_send_framed(type, payload, len);
   spinlock_release(&telemetry_lock);
@@ -80,9 +42,22 @@ void telemetry_report_task_created(uint16_t task_id, uint32_t core_id, uint8_t p
   spinlock_release(&telemetry_lock);
 }
 
-// Shared by telemetry_report_task_blocked()/telemetry_report_task_unblocked()
-// — same tiny payload shape (task_id + core_id), just a different packet type.
-static void telemetry_report_task_event(TelemetryPacketType type, uint16_t task_id, uint32_t core_id)
+void telemetry_report_task_blocked(uint16_t task_id, uint32_t core_id, TelemetrySyncKind sync_kind, uint16_t sync_id)
+{
+  uint8_t payload[6];
+  payload[0] = (uint8_t)(task_id >> 8);
+  payload[1] = (uint8_t)(task_id & 0xFFU);
+  payload[2] = (uint8_t)core_id;
+  payload[3] = (uint8_t)sync_kind;
+  payload[4] = (uint8_t)(sync_id >> 8);
+  payload[5] = (uint8_t)(sync_id & 0xFFU);
+
+  spinlock_acquire(&telemetry_lock);
+  telemetry_send_framed(PKT_TASK_BLOCKED, payload, sizeof(payload));
+  spinlock_release(&telemetry_lock);
+}
+
+void telemetry_report_task_unblocked(uint16_t task_id, uint32_t core_id)
 {
   uint8_t payload[3];
   payload[0] = (uint8_t)(task_id >> 8);
@@ -90,18 +65,224 @@ static void telemetry_report_task_event(TelemetryPacketType type, uint16_t task_
   payload[2] = (uint8_t)core_id;
 
   spinlock_acquire(&telemetry_lock);
-  telemetry_send_framed(type, payload, sizeof(payload));
+  telemetry_send_framed(PKT_TASK_UNBLOCKED, payload, sizeof(payload));
   spinlock_release(&telemetry_lock);
 }
 
-void telemetry_report_task_blocked(uint16_t task_id, uint32_t core_id)
+// ── Sync primitive tracking (mutex/semaphore/queue) ─────────────────────────
+// See docs.md.
+
+// Shared counter across all sync kinds; guarded by telemetry_lock so
+// allocate+broadcast is atomic.
+static uint16_t next_sync_id = 0;
+
+// Roster for telemetry_rebroadcast_sync_roster(). Write-once per slot, so
+// it can be read without telemetry_lock once sync_registry_count has been
+// snapshotted under the lock.
+typedef struct {
+  TelemetrySyncKind kind;
+  uint16_t sync_id;
+  uint16_t parent_sync_id;
+  uint8_t name_len;
+  char name[TELEMETRY_SYNC_NAME_MAX];
+} TelemetrySyncRegistryEntry;
+
+static TelemetrySyncRegistryEntry sync_registry[TELEMETRY_MAX_SYNC_OBJECTS];
+static uint16_t sync_registry_count = 0;
+
+uint16_t telemetry_register_sync(TelemetrySyncKind kind, uint16_t parent_sync_id, const char *name)
 {
-  telemetry_report_task_event(PKT_TASK_BLOCKED, task_id, core_id);
+  uint8_t payload[5 + TELEMETRY_SYNC_NAME_MAX];
+
+  spinlock_acquire(&telemetry_lock);
+
+  uint16_t sync_id = next_sync_id++;
+
+  payload[0] = (uint8_t)kind;
+  payload[1] = (uint8_t)(sync_id >> 8);
+  payload[2] = (uint8_t)(sync_id & 0xFFU);
+  payload[3] = (uint8_t)(parent_sync_id >> 8);
+  payload[4] = (uint8_t)(parent_sync_id & 0xFFU);
+
+  uint8_t name_len = 0;
+  while ((name != NULL) && (name[name_len] != '\0') && (name_len < TELEMETRY_SYNC_NAME_MAX)) {
+    payload[5 + name_len] = (uint8_t)name[name_len];
+    name_len++;
+  }
+
+  // Registry storage past TELEMETRY_MAX_SYNC_OBJECTS is silently dropped — the
+  // one-shot broadcast above still goes out either way; only the later
+  // re-announcement is affected for any entries beyond the cap.
+  if (sync_registry_count < TELEMETRY_MAX_SYNC_OBJECTS) {
+    TelemetrySyncRegistryEntry *entry = &sync_registry[sync_registry_count];
+    entry->kind = kind;
+    entry->sync_id = sync_id;
+    entry->parent_sync_id = parent_sync_id;
+    entry->name_len = name_len;
+    for (uint8_t i = 0; i < name_len; i++) {
+      entry->name[i] = name[i];
+    }
+    sync_registry_count++;   // bumped only after the entry is fully written
+  }
+
+  telemetry_send_framed(PKT_SYNC_CREATED, payload, (uint8_t)(5 + name_len));
+  spinlock_release(&telemetry_lock);
+
+  return sync_id;
 }
 
-void telemetry_report_task_unblocked(uint16_t task_id, uint32_t core_id)
+void telemetry_rebroadcast_sync_roster(void)
 {
-  telemetry_report_task_event(PKT_TASK_UNBLOCKED, task_id, core_id);
+  spinlock_acquire(&telemetry_lock);
+  uint16_t count = sync_registry_count;
+  spinlock_release(&telemetry_lock);
+
+  for (uint16_t i = 0; i < count; i++) {
+    // Safe to read without the lock: entries are write-once, and every index below
+    // `count` was already fully written before sync_registry_count was bumped past
+    // it (see telemetry_register_sync()).
+    const TelemetrySyncRegistryEntry *entry = &sync_registry[i];
+
+    uint8_t payload[5 + TELEMETRY_SYNC_NAME_MAX];
+    payload[0] = (uint8_t)entry->kind;
+    payload[1] = (uint8_t)(entry->sync_id >> 8);
+    payload[2] = (uint8_t)(entry->sync_id & 0xFFU);
+    payload[3] = (uint8_t)(entry->parent_sync_id >> 8);
+    payload[4] = (uint8_t)(entry->parent_sync_id & 0xFFU);
+    for (uint8_t j = 0; j < entry->name_len; j++) {
+      payload[5 + j] = (uint8_t)entry->name[j];
+    }
+
+    // Masks IRQs so this core's own timer tick can't splice into an
+    // in-flight frame mid-send — see docs.md.
+    uint32_t cpsr = enter_critical();
+    spinlock_acquire(&telemetry_lock);
+    telemetry_send_framed(PKT_SYNC_CREATED, payload, (uint8_t)(5 + entry->name_len));
+    spinlock_release(&telemetry_lock);
+    exit_critical(cpsr);
+
+    // Drains here instead of task_delay_ms(1) between frames — a delay
+    // starved the ring drain long enough to overflow it. See docs.md.
+    telemetry_drain_tick_rings();
+  }
+}
+
+void telemetry_report_mutex_owner_changed(uint16_t sync_id, uint8_t has_owner, uint16_t owner_task_id, uint32_t owner_core_id)
+{
+  uint8_t payload[6];
+  payload[0] = (uint8_t)(sync_id >> 8);
+  payload[1] = (uint8_t)(sync_id & 0xFFU);
+  payload[2] = has_owner;
+  payload[3] = (uint8_t)(owner_task_id >> 8);
+  payload[4] = (uint8_t)(owner_task_id & 0xFFU);
+  payload[5] = (uint8_t)owner_core_id;
+
+  spinlock_acquire(&telemetry_lock);
+  telemetry_send_framed(PKT_MUTEX_OWNER_CHANGED, payload, sizeof(payload));
+  spinlock_release(&telemetry_lock);
+}
+
+// ── Boot / DFU tracking (locked wrappers — app side) ────────────────────────
+// Defined here for API symmetry with telemetry_boot.c, though the app only
+// calls the stage/milestone/slot-confirmed subset today. See docs.md.
+
+void telemetry_report_boot_stage_enter(TelemetryBootStage stage)
+{
+  uint8_t payload[5] = { (uint8_t)stage, 0, 0, 0, 0 };   // reserved bytes always 0 — see telemetry.h
+  spinlock_acquire(&telemetry_lock);
+  telemetry_send_framed(PKT_BOOT_STAGE_ENTER, payload, sizeof(payload));
+  spinlock_release(&telemetry_lock);
+}
+
+void telemetry_report_boot_milestone(TelemetryBootMilestoneId id, TelemetryBootStage stage, uint32_t counter)
+{
+  uint8_t payload[6];
+  payload[0] = (uint8_t)id;
+  payload[1] = (uint8_t)stage;
+  payload[2] = (uint8_t)(counter >> 24);
+  payload[3] = (uint8_t)(counter >> 16);
+  payload[4] = (uint8_t)(counter >> 8);
+  payload[5] = (uint8_t)counter;
+  spinlock_acquire(&telemetry_lock);
+  telemetry_send_framed(PKT_BOOT_MILESTONE, payload, sizeof(payload));
+  spinlock_release(&telemetry_lock);
+}
+
+void telemetry_report_boot_info_image_header(TelemetryBootStage stage, uint32_t version_num, uint32_t fw_length,
+                                             uint32_t expected_crc, uint32_t actual_crc, uint8_t crc_ok)
+{
+  uint8_t payload[19];
+  payload[0] = (uint8_t)BOOT_INFO_IMAGE_HEADER;
+  payload[1] = (uint8_t)stage;
+  payload[2] = (uint8_t)(version_num >> 24);
+  payload[3] = (uint8_t)(version_num >> 16);
+  payload[4] = (uint8_t)(version_num >> 8);
+  payload[5] = (uint8_t)version_num;
+  payload[6] = (uint8_t)(fw_length >> 24);
+  payload[7] = (uint8_t)(fw_length >> 16);
+  payload[8] = (uint8_t)(fw_length >> 8);
+  payload[9] = (uint8_t)fw_length;
+  payload[10] = (uint8_t)(expected_crc >> 24);
+  payload[11] = (uint8_t)(expected_crc >> 16);
+  payload[12] = (uint8_t)(expected_crc >> 8);
+  payload[13] = (uint8_t)expected_crc;
+  payload[14] = (uint8_t)(actual_crc >> 24);
+  payload[15] = (uint8_t)(actual_crc >> 16);
+  payload[16] = (uint8_t)(actual_crc >> 8);
+  payload[17] = (uint8_t)actual_crc;
+  payload[18] = crc_ok;
+  spinlock_acquire(&telemetry_lock);
+  telemetry_send_framed(PKT_BOOT_INFO, payload, sizeof(payload));
+  spinlock_release(&telemetry_lock);
+}
+
+void telemetry_report_boot_info_slot_state(uint8_t active_app_slot, uint8_t app_slot_trial, uint32_t trial_boot_count,
+                                           uint32_t wdt_reset_count, int32_t wdt_reset_tolerance,
+                                           uint8_t wdt_reset_policy, uint8_t wdt_reset_reason)
+{
+  uint8_t payload[17];
+  payload[0] = (uint8_t)BOOT_INFO_SLOT_STATE;
+  payload[1] = active_app_slot;
+  payload[2] = app_slot_trial;
+  payload[3] = (uint8_t)(trial_boot_count >> 24);
+  payload[4] = (uint8_t)(trial_boot_count >> 16);
+  payload[5] = (uint8_t)(trial_boot_count >> 8);
+  payload[6] = (uint8_t)trial_boot_count;
+  payload[7] = (uint8_t)(wdt_reset_count >> 24);
+  payload[8] = (uint8_t)(wdt_reset_count >> 16);
+  payload[9] = (uint8_t)(wdt_reset_count >> 8);
+  payload[10] = (uint8_t)wdt_reset_count;
+  payload[11] = (uint8_t)((uint32_t)wdt_reset_tolerance >> 24);
+  payload[12] = (uint8_t)((uint32_t)wdt_reset_tolerance >> 16);
+  payload[13] = (uint8_t)((uint32_t)wdt_reset_tolerance >> 8);
+  payload[14] = (uint8_t)(uint32_t)wdt_reset_tolerance;
+  payload[15] = wdt_reset_policy;
+  payload[16] = wdt_reset_reason;
+  spinlock_acquire(&telemetry_lock);
+  telemetry_send_framed(PKT_BOOT_INFO, payload, sizeof(payload));
+  spinlock_release(&telemetry_lock);
+}
+
+void telemetry_report_boot_info_boot_flags(uint8_t reset_reason, uint8_t dfu_requested, uint8_t fw_crc_ok)
+{
+  uint8_t payload[4] = { (uint8_t)BOOT_INFO_BOOT_FLAGS, reset_reason, dfu_requested, fw_crc_ok };
+  spinlock_acquire(&telemetry_lock);
+  telemetry_send_framed(PKT_BOOT_INFO, payload, sizeof(payload));
+  spinlock_release(&telemetry_lock);
+}
+
+void telemetry_report_dfu_event(TelemetryDfuEventPhase phase, uint8_t target, uint32_t extra)
+{
+  uint8_t payload[6];
+  payload[0] = (uint8_t)phase;
+  payload[1] = target;
+  payload[2] = (uint8_t)(extra >> 24);
+  payload[3] = (uint8_t)(extra >> 16);
+  payload[4] = (uint8_t)(extra >> 8);
+  payload[5] = (uint8_t)extra;
+  spinlock_acquire(&telemetry_lock);
+  telemetry_send_framed(PKT_DFU_EVENT, payload, sizeof(payload));
+  spinlock_release(&telemetry_lock);
 }
 
 // ── Per-core tick-state rings ──────────────────────────────────────────────
@@ -203,6 +384,18 @@ void telemetry_publisher_task(void *params)
       telemetry_send(PKT_HEARTBEAT, payload, sizeof(payload));
       heartbeat_counter++;
     }
+
+    // Re-announce the sync-object roster every ~2s (2000 iterations at ~1ms/iteration)
+    // — see telemetry_rebroadcast_sync_roster()'s doc comment for why the one-shot
+    // send from telemetry_register_sync() alone isn't reliable enough on its own.
+    // Rare enough not to matter bandwidth-wise (a handful of small packets every
+    // couple seconds); frequent enough that a viewer is never stuck waiting long for
+    // the roster to resolve after attaching late or losing the first attempt to
+    // reset-transient line noise.
+    if ((loop_counter % 2000U) == 0U) {
+      telemetry_rebroadcast_sync_roster();
+    }
+
     loop_counter++;
 
     task_delay_ms(1U);

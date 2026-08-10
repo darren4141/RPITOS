@@ -8,6 +8,7 @@
 #include "emmc.h"
 #include "jtag.h"
 #include "status.h"
+#include "telemetry.h"
 #include "uart.h"
 #include "watchdog.h"
 
@@ -62,9 +63,17 @@ static void bootloader_init()
   uart_init(UART_BAUDRATE_115200);
   uart_print("\r\n\n-------------------Bootloader start, initializing components-------------------\r\n");
   uart_print("uart initialized\r\n");
+
+#ifdef RTOS_TELEMETRY
+  uart_telemetry_init();
+  telemetry_report_boot_stage_enter(BOOT_STAGE_BOOTLOADER);
+#endif
+
   jtag_gpio_init();
   uart_print("jtag initialized\r\n");
-
+#ifdef RTOS_TELEMETRY
+  telemetry_report_boot_milestone(BOOT_MS_JTAG_INIT_DONE, BOOT_STAGE_BOOTLOADER, 0);
+#endif
 
   boot_flags_init();
 
@@ -73,15 +82,27 @@ static void bootloader_init()
   status = emmc_init();
   if (status != E_OK) {
     uart_printf("emmc module initialization failed with exit code: (%d)\r\n", status);
+#ifdef RTOS_TELEMETRY
+    telemetry_report_boot_milestone(BOOT_MS_EMMC_INIT_FAILED, BOOT_STAGE_BOOTLOADER, 0);
+#endif
   }
   else {
     uart_print("emmc module initialized\r\n");
+#ifdef RTOS_TELEMETRY
+    telemetry_report_boot_milestone(BOOT_MS_EMMC_INIT_DONE, BOOT_STAGE_BOOTLOADER, 0);
+#endif
   }
 
   STATUS_OK_OR_WARN(boot_init());
   uart_print("boot module initialized\r\n");
+#ifdef RTOS_TELEMETRY
+  telemetry_report_boot_milestone(BOOT_MS_BOOT_MODULE_INIT_DONE, BOOT_STAGE_BOOTLOADER, 0);
+#endif
   STATUS_OK_OR_WARN(dfu_init());
   uart_print("dfu module initialized\r\n");
+#ifdef RTOS_TELEMETRY
+  telemetry_report_boot_milestone(BOOT_MS_DFU_MODULE_INIT_DONE, BOOT_STAGE_BOOTLOADER, 0);
+#endif
   uart_print("-------------------Done initializing components-------------------\r\n\n\n");
 
 
@@ -91,6 +112,14 @@ static void bootloader_init()
   uart_printf("wdt meta loaded - active app slot %s%s\r\n",
               APP_SLOT_LETTER(wdt_meta.active_app_slot),
               wdt_meta.app_slot_trial ? " (trial)" : "");
+#ifdef RTOS_TELEMETRY
+  // Snapshot as read from eMMC, before this boot's trial/tolerance logic
+  // below may mutate it — see md/client/device/boot_init_tracking.md.
+  telemetry_report_boot_info_slot_state((wdt_meta.active_app_slot == APP_SLOT_B) ? 1U : 0U,
+                                         (uint8_t)wdt_meta.app_slot_trial, wdt_meta.trial_boot_count,
+                                         wdt_meta.wdt_reset_count, wdt_meta.wdt_reset_tolerance,
+                                         (uint8_t)wdt_meta.wdt_reset_policy, (uint8_t)wdt_meta.wdt_reset_reason);
+#endif
 
   // Revalidate the active slot on a cold boot; a rollback below also forces it.
   bool revalidate = (boot_flags.reset_reason == RESET_REASON_COLD);
@@ -105,6 +134,9 @@ static void bootloader_init()
       uart_printf("boot: trial slot %s unconfirmed after %u boots - rolling back to %s\r\n",
                   APP_SLOT_LETTER(wdt_meta.active_app_slot),
                   wdt_meta.trial_boot_count, APP_SLOT_LETTER(prev));
+#ifdef RTOS_TELEMETRY
+      telemetry_report_boot_milestone(BOOT_MS_TRIAL_ROLLBACK, BOOT_STAGE_BOOTLOADER, 0);
+#endif
       wdt_meta.active_app_slot = prev;
       wdt_meta.app_slot_trial = 0U;
       wdt_meta.trial_boot_count = 0U;
@@ -128,6 +160,9 @@ static void bootloader_init()
       && ((int32_t)wdt_meta.wdt_reset_count > wdt_meta.wdt_reset_tolerance)) {
     if (wdt_meta.wdt_reset_policy == (uint32_t)WATCHDOG_RESET_POLICY_FORCE_UPDATE) {
       uart_print("boot: tolerance exceeded, forcing DFU\r\n");
+#ifdef RTOS_TELEMETRY
+      telemetry_report_boot_milestone(BOOT_MS_TOLERANCE_EXCEEDED_FORCE_DFU, BOOT_STAGE_BOOTLOADER, 0);
+#endif
       wdt_meta.wdt_reset_count = 0U;
       boot_flags.dfu_requested = DFU_REQUEST;
       boot_flags.reset_reason = RESET_REASON_SOFTWARE;
@@ -136,6 +171,9 @@ static void bootloader_init()
       uint32_t prev = APP_SLOT_OTHER(wdt_meta.active_app_slot);
       uart_printf("boot: tolerance exceeded, rolling back to slot %s\r\n",
                   APP_SLOT_LETTER(prev));
+#ifdef RTOS_TELEMETRY
+      telemetry_report_boot_milestone(BOOT_MS_TOLERANCE_EXCEEDED_ROLLBACK, BOOT_STAGE_BOOTLOADER, 0);
+#endif
       wdt_meta.active_app_slot = prev;
       wdt_meta.app_slot_trial = 0U;
       wdt_meta.trial_boot_count = 0U;
@@ -156,6 +194,12 @@ static void bootloader_init()
   }
 
   STATUS_OK_OR_WARN(wdt_meta_write());
+#ifdef RTOS_TELEMETRY
+  // dfu_requested is DFU_REQUEST (a 32-bit magic) or 0, not already a bool — normalize.
+  telemetry_report_boot_info_boot_flags((uint8_t)boot_flags.reset_reason,
+                                         (boot_flags.dfu_requested == DFU_REQUEST) ? 1U : 0U,
+                                         (uint8_t)boot_flags.fw_crc_ok);
+#endif
   uart_print("-------------------Done checking metadata-------------------\r\n");
 }
 
@@ -210,6 +254,9 @@ void kmain(void)
   }
 
   uart_print("boot: all retries exhausted, entering DFU recovery loop\r\n");
+#ifdef RTOS_TELEMETRY
+  telemetry_report_boot_milestone(BOOT_MS_ALL_RETRIES_EXHAUSTED, BOOT_STAGE_BOOTLOADER, 0);
+#endif
   while (1) {
     if (dfu_receive() == E_OK) {
       // dfu_receive() validated the image and flipped the active slot to it.

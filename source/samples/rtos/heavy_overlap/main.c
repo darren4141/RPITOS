@@ -173,7 +173,7 @@ void kmain(void)
   software_timer_init();
   software_timer_start();
 
-  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 3);
+  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 3, 1000);
   ret = watchdog_task_start();
   if (ret != E_OK) {
     uart_printf("Create watchdog task failed with exit code %d\r\n", ret);
@@ -186,8 +186,8 @@ void kmain(void)
   uart_print("Initializing General Timer...\r\n");
   gentimer_init(&clk_freq, hz);
   delay_init(&tick_count);
-  queue_init(&test_queue, 4, sizeof(uint32_t));
-  semaphore_init(&shared_semaphore, 1, 1);
+  queue_init(&test_queue, 4, sizeof(uint32_t), "test_queue");
+  semaphore_init(&shared_semaphore, 1, 1, "shared_sem");
   // DFU recovery is wired up automatically now (scheduler_init() + uart_task_start()) —
   // no per-app call needed. See dfu_trigger.h.
 

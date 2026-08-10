@@ -29,11 +29,8 @@ static TaskControlBlock *tcb_uart2 = NULL;
 static volatile uint32_t core1_clk_freq;
 static volatile uint64_t core1_tick_count = 0;
 
-// Each of the three core 1 tasks also calls uart_printf() on its own toggle —
-// three independent producers on one core, plus core 0's two below, all
-// landing in the single shared ring buffer. Exercises uart.c's uart_buf_lock
-// (see uart/docs.md's Multicore section) both same-core (these three against
-// each other) and cross-core (against core 0's producers).
+// Each core 1 task also uart_printf()s on its own toggle — three more UART
+// producers alongside core 0's two (see README's uart_buf_lock stress note).
 static void led16_task(void *params)
 {
   (void)params;
@@ -108,9 +105,7 @@ static void core1_kmain(void)
   scheduler_start();                                                   // never returns
 }
 
-// Core 0 UART tasks (RTOS) — two independent tasks at different periods, both
-// sending over the UART task (DMA TX). uart_printf is task-safe, same-core and
-// cross-core (see uart/docs.md's Multicore section).
+// Core 0 UART tasks — two independent producers at different periods.
 static void core0_uart_task(void *params)
 {
   (void)params;
@@ -143,7 +138,7 @@ void kmain(void)
              "core 1: its own RTOS scheduler, 3 tasks blinking GPIO 16/20/21"
              " and each printing over UART\r\n\r\n");
 
-  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 1);
+  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 1, 1000);
 
   scheduler_init(0, &clk_freq, hz, &tick_count);
   uart_task_start();

@@ -34,3 +34,22 @@ Consequence: the IRQ handler checks Core0 IRQ Source (`0xFF800060`) bit 1
 instead of `GICC_IAR` to dispatch the timer. No `GICC_IAR`/`GICC_EOIR` is
 needed for this path — the interrupt de-asserts automatically once
 `CNTP_CVAL > CNTPCT`.
+
+## ARM Local per-core mailboxes
+
+`CORE_MBOX_IRQCNTL`/`CORE_MBOX0_SET` are a separate, non-GIC signal used for
+companion-core IPIs (`gic_send_mailbox_ipi()`) — same reasoning as the timer
+routing above: `GICD_IGROUPR` is confirmed write-ignored from this
+Non-secure-only OS, so a GIC SGI can never be delivered here, and these
+bypass the GIC entirely. See `companion_core/docs.md` and
+`companion_core_soft_reset_plan.md`'s "Why mailbox, not SGI" for the full
+investigation.
+
+Mailbox **0** specifically is used — matches Linux's own convention for
+IPIs. Mailbox 3 is reserved for the boot ROM/bootstrap's one-time
+secondary-core release kick (see `startup/docs.md`); mailboxes 1 and 2 are
+unused by anything in this codebase. Bits `[3:0]` of `CORE_MBOX_IRQCNTL`
+are the IRQ enables for mailboxes 0-3 respectively, mirroring
+`CORE_TIMER_IRQCNTL`'s IRQ/FIQ split. Mailbox 0's RDCLR register is
+read-to-clear (no separate write-to-clear) — cleared by the receiving core
+reading it in `startup.s`'s `_irq_handler`.

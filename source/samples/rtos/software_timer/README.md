@@ -19,7 +19,10 @@ the log. Callbacks run in the software-timer service task (`TASK_PRIORITY_5`).
 
 A second task (`spawner_task`) continuously creates one-shot timers from a
 fixed 8-slot pool, cycling through periods 200–799 ms, to exercise timer
-creation/expiry under a steadier load than the five fixed timers alone.
+creation/expiry under a steadier load than the five fixed timers alone. A
+one-shot returns its slot to `TIMER_LIST_NONE` once it fires, and only
+`spawner_task` ever moves a slot out of `NONE`, so scanning for a free slot
+and reusing it is race-free on one core.
 
 Only the uart, dfu-trigger, and watchdog tasks are pulled in besides the
 timer subsystem itself.

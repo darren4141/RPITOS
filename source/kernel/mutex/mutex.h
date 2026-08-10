@@ -22,12 +22,20 @@ struct Mutex {
   // cores' schedulers), so it carries its own lock rather than relying on
   // any core's scheduler lock. See spinlock/docs.md.
   Spinlock           lock;
+#ifdef RTOS_TELEMETRY
+  // Assigned once by mutex_init() (telemetry_register_sync()), never mutated
+  // afterward — identifies this mutex on the wire (telemetry_report_task_blocked(),
+  // telemetry_report_mutex_owner_changed()). Field only exists in telemetry builds,
+  // so non-telemetry builds see zero layout change — see md/client/device/sync_view.md.
+  uint16_t sync_id;
+#endif
 };
 
 /**
  * @brief Initialize a mutex to the unlocked state.
+ * @param name Only used (broadcast once, never stored) when built with RTOS_TELEMETRY; pass NULL or a literal freely either way.
  */
-void mutex_init(Mutex *mtx);
+void mutex_init(Mutex *mtx, const char *name);
 
 /**
  * @brief Enable or disable priority inheritance for this mutex.

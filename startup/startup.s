@@ -1,10 +1,7 @@
 @ Vector table (_start + 8 branches, 0x00-0x1F) is shared across all images.
 .include "startup/vectors.s"
 
-    @ DFU-support marker at image offset 0x20 (just past the 8-entry vector
-    @ table). Proves this app was built with the standard rpitos startup, so
-    @ the bootloader's dfu_receive will accept it. Reached only as data — the
-    @ reset vector above branches over it to _reset_handler.
+    @ DFU-support marker, reached only as data (see docs.md).
     @ KEEP IN SYNC with DFU_APP_MAGIC in source/boot/dfu_receive/dfu_receive.h.
     .word 0x44465521             @ 0x20  'D' 'F' 'U' '!'
 
@@ -16,9 +13,7 @@ _reset_handler:
     cmp  r0, #0
     bne  _secondary_hang$            @ non-zero core → park
 
-    @ ---- Drop from HYP mode to SVC mode if needed -------------------------
-    @ BCM2711/CM4 firmware leaves the CPU in non-secure HYP mode (0x1A).
-    @ MSR CPSR cannot change the mode bits from HYP — must use ERET instead.
+    @ ---- Drop from HYP mode to SVC mode if needed (see docs.md) -----------
     mrs  r0, cpsr
     and  r0, r0, #0x1F              @ extract mode bits
     cmp  r0, #0x1A                  @ in HYP mode?
@@ -35,11 +30,8 @@ _reset_handler:
     adr  r0, _stack_setup
     msr  elr_hyp, r0
 
-    @ Allow NS EL1 to access the physical counter and physical timer registers.
-    @ CNTHCTL[1] PL1PCEN  = 1 → enables CNTP_CTL / CNTP_CVAL / CNTP_TVAL at EL1
-    @ CNTHCTL[0] PL1PCTEN = 1 → enables CNTPCT (counter read) at EL1
-    @ Default is 0 — without this, mcr/mrrc to those regs trap as Undefined Instruction.
-    @ Must be done here in HYP mode; CNTHCTL is not writable from EL1.
+    @ Allow NS EL1 to access the physical counter/timer regs — must be done here
+    @ in HYP mode, CNTHCTL is not writable from EL1 (see docs.md).
     mrc  p15, 4, r0, c14, c1, 0    @ read  CNTHCTL_EL2
     orr  r0, r0, #0x3              @ set PL1PCEN | PL1PCTEN
     mcr  p15, 4, r0, c14, c1, 0    @ write CNTHCTL_EL2
@@ -49,9 +41,8 @@ _reset_handler:
 _stack_setup:
 
     @ ---- Disable D-cache and I-cache --------------------------------
-    @ IMPORTANT: must be done here in SVC mode so mcr writes EL1's SCTLR.
-    @ If done before the HYP exit (still in HYP mode), mcr would write
-    @ HSCTLR instead, leaving the EL1 D-cache enabled by firmware.
+    @ Must be here in SVC mode: in HYP mode this mcr would write HSCTLR
+    @ instead of SCTLR, leaving the EL1 D-cache enabled (see docs.md).
     mrc  p15, 0, r0, c1, c0, 0     @ read SCTLR
     bic  r0, r0, #(1 << 2)          @ C = 0  (D-cache off)
     bic  r0, r0, #(1 << 12)         @ I = 0  (I-cache off)
@@ -136,29 +127,17 @@ _irq_handler:
     srsdb sp!, #0x13             @ sp_svc -= 8; [sp_svc] = lr_irq, [sp_svc+4] = SPSR_irq
 
     cps  #0x13                   @ switch to SVC mode (sp = sp_svc = task's own stack)
-    push {r0-r12, lr}            @ save r0–r12 AND lr_svc on task's SVC stack.
-                                 @ lr_svc is live task state: GCC uses lr as the
-                                 @ return address in leaf functions (bx lr) and as
-                                 @ a scratch register elsewhere. If it isn't part
-                                 @ of the context frame, the next task resumes
-                                 @ with the previous task's lr — a leaf-function
-                                 @ return then jumps into data (e.g. another
-                                 @ task's stack) and traps as Undefined.
+    push {r0-r12, lr}            @ save r0-r12 AND lr_svc — lr_svc is live task
+                                 @ state (GCC uses it as a leaf-function return
+                                 @ address / scratch), must survive the switch (see docs.md)
 
 
-    @ Check this core's ARM Local mailbox 0 BEFORE the GIC IAR read —
-    @ companion_core_reset_active()'s IPI (gic_send_mailbox_ipi()) is a
-    @ separate, non-GIC signal (see gic.h/companion_core_soft_reset_plan.md:
-    @ GICD_IGROUPR is confirmed write-ignored from this Non-secure-only OS,
-    @ so a GIC SGI can never be delivered here — this bypasses the GIC
-    @ entirely, same as CORE_TIMER_IRQCNTL already does for the timer). It
-    @ would never show up via GICC_IAR at all, so it has to be checked
-    @ independently or a pending IPI would be silently missed as spurious.
+    @ Check this core's ARM Local mailbox 0 BEFORE the GIC IAR read — the
+    @ companion-core IPI bypasses the GIC entirely and would never show up
+    @ via GICC_IAR (see docs.md / gic/docs.md).
     mrc  p15, 0, r5, c0, c0, 5   @ MPIDR
-    and  r5, r5, #0x3            @ this core's id — r5 kept (callee-saved) for
-                                 @ mailbox_park_request$ below; cntx_switch$
-                                 @ recomputes its own copy independently rather
-                                 @ than relying on this one surviving that far
+    and  r5, r5, #0x3            @ this core's id — kept in r5 (callee-saved) for
+                                 @ mailbox_park_request$ below; cntx_switch$ recomputes its own copy
     ldr  r0, =0xFF800060          @ ARM_LOCAL_BASE + Core0 IRQ Source
     ldr  r1, [r0, r5, lsl #2]     @ this core's IRQ Source register
     tst  r1, #0x10                 @ LOCAL_IRQ_MAILBOX0 (bit 4)
@@ -188,12 +167,8 @@ _irq_handler:
     b    irq_eoi$
 
 cntx_switch$:
-    @ p_task_control_block is now one slot per core (TaskControlBlock
-    @ *p_task_control_block[COMPANION_CORE_MAX_CORES]) — each core only ever touches its
-    @ own slot here, so index by MPIDR & 3, not a bare symbol load. Keep the
-    @ core id in r5 (callee-saved per AAPCS) so it survives the two bl calls
-    @ below — r0-r3 are caller-saved/scratch and WILL be clobbered by them,
-    @ so &p_task_control_block[core_id] must be recomputed after, not reused.
+    @ p_task_control_block is one slot per core — index by MPIDR & 3, keep the
+    @ core id in r5 (callee-saved) across the two bl calls below (see docs.md).
     mrc  p15, 0, r5, c0, c0, 5   @ MPIDR
     and  r5, r5, #0x3            @ this core's id
 
@@ -225,11 +200,7 @@ irq_done$:
     rfeia sp!
 
 mailbox_park_request$:
-    @ DEBUG: raw marker, before anything else — confirms this core actually
-    @ received a mailbox 0 IPI this cycle. Bypasses uart.c's ring
-    @ buffer/lock entirely (direct PL011 register poke). r5 (core id) is only
-    @ read here, never written, so it survives untouched for the real work
-    @ below.
+    @ DEBUG: raw marker "[M<core>]", see startup/docs.md
     ldr  r0, =0xFE201000          @ UART0 base
 _dbg_mbox_wait1$:
     ldr  r1, [r0, #0x18]
@@ -256,45 +227,21 @@ _dbg_mbox_wait4$:
     mov  r1, #']'
     str  r1, [r0, #0x00]
 
-    @ Drain/ack this core's Mailbox 0 — QA7's RDCLR register clears as a side
-    @ effect of being read, there's no separate write-to-clear. No GIC
-    @ IAR/EOIR involved for this path at all (it never went through the GIC),
-    @ same reasoning as the CNTPNSIRQ ARM-Local routing already used for the
-    @ timer — see gic/docs.md.
+    @ Drain/ack this core's Mailbox 0 — read-to-clear, no GIC IAR/EOIR involved (see docs.md)
     ldr  r0, =0xFF8000C0           @ ARM_LOCAL_BASE + Core0 Mailbox0 RDCLR
     ldr  r2, [r0, r5, lsl #4]      @ read Core<id> Mailbox0 RDCLR, clears it
 
-    @ No SP fixup needed here — _companion_core_park$ switches to a dedicated
-    @ stack immediately, so whatever SP currently holds (still the abandoned
-    @ task's, 64 bytes deeper than its real value thanks to _irq_handler's
-    @ own prologue) is about to be discarded entirely, not reused.
+    @ No SP fixup needed — _companion_core_park$ switches to a dedicated stack immediately
     b    _companion_core_park$
 
 _secondary_hang$:
     wfe
     b _secondary_hang$
 
-@ Reached only via an ARM Local mailbox 0 IPI (mailbox_park_request$ above,
-@ triggered by companion_core_reset_active()) — a DFU/software reboot on
-@ another core wants this one to stop, so it can be released again after the
-@ reboot without a physical power cycle. Abandons whatever task/scheduler
-@ state this core had (the next boot's zero_bss$ wipes it anyway — see
-@ companion_core_soft_reset_plan.md's "Race window") and re-parks exactly
-@ like the bootstrap's _sec_park$, watching the same cross-image mailbox.
-@
-@ First switches SP to a dedicated per-core stack (g_companion_core_park_stack
-@ in companion_core.c) instead of continuing to use the abandoned task's own
-@ stack. Reusing that one turned out to be unsafe — its remaining headroom
-@ depends entirely on how deep the interrupted task happened to be when the
-@ IPI arrived, not something under our control, and the fresh entry
-@ function's own bring-up chain (gic_percore_init/gentimer_init/
-@ scheduler_init/task_create) needs real depth of its own. Overflowing into
-@ the abandoned stack's watermark-filled tail is exactly what produced
-@ repeated TASK_WATERMARK-as-return-address crashes during this
-@ investigation. There's no cross-image symbol for the bootstrap-provided
-@ per-core SVC stack to switch to instead (it lives inside bootstrap's own
-@ size-dependent memory layout, unlike the fixed CORE_MAILBOX_ADDR/
-@ APP_START_ADDR region), so this is an app-image-owned stack instead.
+@ Reached only via an ARM Local mailbox 0 IPI, requesting this core re-park
+@ for a DFU/software reboot without a physical power cycle. Switches to a
+@ dedicated per-core stack first — reusing the abandoned task's own stack is
+@ unsafe (see docs.md). See docs.md for the full companion-core park protocol.
 _companion_core_park$:
     mrc  p15, 0, r0, c0, c0, 5   @ MPIDR
     and  r0, r0, #0x3            @ this core's id
@@ -318,11 +265,8 @@ _companion_core_park_wait$:
     cmp  r2, #0
     beq  _companion_core_park_wait$
 
-    @ DEBUG: raw marker — confirms we saw a fresh non-zero mailbox value and
-    @ are about to blx into it. r0 (core id), r1 (CORE_MAILBOX_ADDR), r2 (the
-    @ entry address) must survive; uses r6-r7 as scratch (push/pop would also
-    @ be safe now that we're on the dedicated park stack, not the abandoned
-    @ task's own one, but there's no need to change a working approach).
+    @ DEBUG: raw marker "[W<core>]", see startup/docs.md. r0/r1/r2 must
+    @ survive; uses r6-r7 as scratch.
     ldr  r6, =0xFE201000
 _dbg_wpark_wait1$:
     ldr  r7, [r6, #0x18]
@@ -351,16 +295,8 @@ _dbg_wpark_wait4$:
 
     blx  r2                      @ run whatever companion_core_start() published
 
-    @ If it ever returns (it shouldn't — scheduler_start() is documented
-    @ "never returns", but does have a real `return E_EMPTY` path if the
-    @ ready list is somehow empty), go back to _companion_core_park$, NOT
-    @ straight to _companion_core_park_wait$ — the mailbox slot still holds
-    @ this same now-stale entry address (nothing re-zeroed it after the
-    @ blx above), so branching to the wait loop directly would immediately
-    @ re-blx the exact same stale pointer in a tight loop instead of
-    @ waiting for a genuinely new release. This is what produced the
-    @ repeated "[M1]" markers and eventual heap exhaustion the one time
-    @ this path actually got exercised.
+    @ If it ever returns, go back to _companion_core_park$, NOT straight to
+    @ _companion_core_park_wait$ — the mailbox slot is still stale (see docs.md).
     b    _companion_core_park$
 
 .globl start_first_task

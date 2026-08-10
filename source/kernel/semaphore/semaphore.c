@@ -25,7 +25,9 @@ static void semaphore_add_to_blocked_list(Semaphore *smph, TaskControlBlock *tcb
   smph->semaphore_blocked_list.num_items++;
 }
 
-void semaphore_init(Semaphore *smph, uint32_t max_count, uint32_t initial_count)
+// Shared by semaphore_init()/semaphore_init_with_parent() — every field except the
+// telemetry registration itself (which needs to know the parent, so stays out of here).
+static void semaphore_init_common(Semaphore *smph, uint32_t max_count, uint32_t initial_count)
 {
   smph->max_count = max_count;
   smph->count = initial_count;
@@ -37,6 +39,25 @@ void semaphore_init(Semaphore *smph, uint32_t max_count, uint32_t initial_count)
 
   spinlock_init(&smph->lock);
 }
+
+void semaphore_init(Semaphore *smph, uint32_t max_count, uint32_t initial_count, const char *name)
+{
+  semaphore_init_common(smph, max_count, initial_count);
+#ifdef RTOS_TELEMETRY
+  smph->sync_id = telemetry_register_sync(SYNC_KIND_SEMAPHORE, TELEMETRY_SYNC_ID_NONE, name);
+#else
+  (void)name;
+#endif
+}
+
+#ifdef RTOS_TELEMETRY
+void semaphore_init_with_parent(Semaphore *smph, uint32_t max_count, uint32_t initial_count, const char *name,
+                                 uint16_t parent_sync_id)
+{
+  semaphore_init_common(smph, max_count, initial_count);
+  smph->sync_id = telemetry_register_sync(SYNC_KIND_SEMAPHORE, parent_sync_id, name);
+}
+#endif
 
 StatusCode semaphore_take(Semaphore *smph, int64_t timeout_ms)
 {
@@ -80,7 +101,7 @@ StatusCode semaphore_take(Semaphore *smph, int64_t timeout_ms)
 
     cur_tcb->current_state = TASK_STATE_BLOCKED;
 #ifdef RTOS_TELEMETRY
-    telemetry_report_task_blocked(cur_tcb->task_id, core_id);
+    telemetry_report_task_blocked(cur_tcb->task_id, core_id, SYNC_KIND_SEMAPHORE, smph->sync_id);
 #endif
     spinlock_release(&smph->lock);
     exit_critical(cpsr);

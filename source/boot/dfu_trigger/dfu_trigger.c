@@ -60,7 +60,7 @@ static void dfu_reboot_task(void *params)
 StatusCode dfu_trigger_task_start(void)
 {
   dfu_trigger_reset();
-  semaphore_init(&dfu_semaphore, 1, 0);
+  semaphore_init(&dfu_semaphore, 1, 0, "dfu_trigger_sem");
   return task_create(dfu_reboot_task, 1024, TASK_PRIORITY_5, NULL, "dfu_reboot", &dfu_tcb);
 }
 

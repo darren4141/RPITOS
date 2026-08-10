@@ -120,7 +120,7 @@ StatusCode software_timer_init()
   blocked_list_head = NULL;
   active_list_head = NULL;
 
-  semaphore_init(&software_timer_semaphore, SEMAPHORE_MAX_COUNT_UNLIMITED, 0U);
+  semaphore_init(&software_timer_semaphore, SEMAPHORE_MAX_COUNT_UNLIMITED, 0U, "sw_timer_sem");
 
   return E_OK;
 }

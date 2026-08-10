@@ -32,9 +32,9 @@ static SoftwareTimer medium_timer;      // periodic 1000 ms
 static SoftwareTimer slow_timer;        // periodic 2000 ms
 static SoftwareTimer oneshot_timer;     // one-shot  5000 ms
 
-// ── Timer callbacks ──────────────────────────────────────────────────────────
-// Run in the software-timer service task. Each receives a pointer to the
-// SoftwareTimer that fired as `arg` (unused here — one callback per timer).
+// ── Timer callbacks ─────────────────────────────────────────────────────────
+// Each receives the fired SoftwareTimer as `arg` (unused here — one callback
+// per timer).
 
 static void heartbeat_cb(void *arg)
 {
@@ -74,10 +74,7 @@ static void oneshot_cb(void *arg)
 }
 
 // ── One-shot spawner ─────────────────────────────────────────────────────────
-// A task that keeps creating one-shot timers. Because SoftwareTimer structs are
-// statically allocated, it recycles a fixed pool: a one-shot returns its slot to
-// TIMER_LIST_NONE once it fires, and only this task ever moves a slot out of
-// NONE, so scanning for a free slot and reusing it is race-free on one core.
+// Recycles a fixed pool of statically-allocated one-shot timers (see README).
 
 #define ONESHOT_POOL_SIZE 8U
 
@@ -123,9 +120,7 @@ static void spawner_task(void *params)
 }
 
 // ── Demo control task ────────────────────────────────────────────────────────
-// Runs after the scheduler is live, so software_timer_create() arms each timer
-// immediately. Later it exercises stop()/reset() so their effect shows in the
-// log, then idles.
+// Arms all five timers, then exercises stop()/reset() at 8 s (see README).
 
 static void demo_task(void *params)
 {
@@ -176,7 +171,7 @@ void kmain(void)
   task_create(demo_task, 2048, TASK_PRIORITY_1, NULL, "demo", &tcb_demo);
   task_create(spawner_task, 2048, TASK_PRIORITY_2, NULL, "spawner", &tcb_spawner);
 
-  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2);
+  watchdog_init(5, WATCHDOG_RESET_POLICY_FORCE_UPDATE, 2, 1000);
   watchdog_task_start();
 
   gic_distributor_init();

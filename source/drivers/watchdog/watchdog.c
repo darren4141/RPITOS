@@ -26,12 +26,16 @@
 
 static uint32_t s_timeout_ticks;
 
+// Set by watchdog_init(); consumed by watchdog_task_start() (WATCHDOG_MINIMAL
+// builds never call either the setter's owning path or the consumer).
+static int64_t s_confirm_delay_ms = WATCHDOG_CONFIRM_MANUAL;
+
 // ── WDT persistent metadata ───────────────────────────────────────────────────
 
 WdtMeta wdt_meta = {
   .magic = 0U,
   .wdt_reset_count = 0U,
-  .wdt_reset_tolerance = -1,
+  .wdt_reset_tolerance = WATCHDOG_RESET_TOLERANCE_INFINITE,
   .wdt_reset_policy = 0U,
   .wdt_reset_reason = 0U,
   .active_app_slot = APP_SLOT_A,
@@ -55,7 +59,7 @@ static void wdt_meta_set_defaults(void)
 {
   wdt_meta.magic = WDT_META_MAGIC;
   wdt_meta.wdt_reset_count = 0U;
-  wdt_meta.wdt_reset_tolerance = -1;
+  wdt_meta.wdt_reset_tolerance = WATCHDOG_RESET_TOLERANCE_INFINITE;
   wdt_meta.wdt_reset_policy = 0U;
   wdt_meta.wdt_reset_reason = 0U;
   wdt_meta.active_app_slot = APP_SLOT_A;
@@ -109,6 +113,7 @@ StatusCode wdt_meta_confirm_slot(void)
 
   wdt_meta.app_slot_trial = 0U;
   wdt_meta.trial_boot_count = 0U;
+  wdt_meta.wdt_reset_count = 0U;
 
   return wdt_meta_write();
 }
@@ -120,7 +125,8 @@ bool watchdog_was_wdt_reset(void)
   return (PM_RSTS & PM_RSTS_HADWRQ) != 0;
 }
 
-StatusCode watchdog_init(uint32_t timeout_s, WatchdogResetPolicy policy, int32_t tolerance)
+StatusCode watchdog_init(uint32_t timeout_s, WatchdogResetPolicy policy, int32_t tolerance,
+                          int64_t confirm_delay_ms)
 {
   if (timeout_s == 0) {
     return E_INVALID_ARGS;
@@ -130,6 +136,7 @@ StatusCode watchdog_init(uint32_t timeout_s, WatchdogResetPolicy policy, int32_t
   }
 
   s_timeout_ticks = (timeout_s * PM_WDOG_TICKS_PER_S) & PM_WDOG_COUNT_MASK;
+  s_confirm_delay_ms = confirm_delay_ms;
 
   PM_WDOG = PM_PASSWORD | s_timeout_ticks;
   PM_RSTC = PM_PASSWORD | PM_RSTC_WRCFG_FULL_RESET;
@@ -167,7 +174,6 @@ void watchdog_trigger_reset(void)
 // ── Kick + confirm (excluded in WATCHDOG_MINIMAL builds) ─────────────────────
 #ifndef WATCHDOG_MINIMAL
 
-static int64_t s_confirm_delay_ms = 0;
 static SoftwareTimer s_watchdog_kick_timer;
 static SoftwareTimer s_confirm_timer;
 static Semaphore s_confirm_semaphore;
@@ -202,12 +208,6 @@ static void watchdog_confirm_task(void *params)
   }
 }
 
-StatusCode watchdog_set_confirm_slot_timing(uint64_t new_time_ms)
-{
-  s_confirm_delay_ms = (int64_t)new_time_ms;
-  return E_OK;
-}
-
 StatusCode watchdog_task_start(void)
 {
   StatusCode ret;
@@ -225,7 +225,7 @@ StatusCode watchdog_task_start(void)
   if (s_confirm_delay_ms >= 0) {
     uint64_t delay = (s_confirm_delay_ms > 0) ? (uint64_t)s_confirm_delay_ms : 1U;
 
-    semaphore_init(&s_confirm_semaphore, 1U, 0U);
+    semaphore_init(&s_confirm_semaphore, 1U, 0U, "wdt_confirm_sem");
 
     ret = task_create(watchdog_confirm_task, 512, TASK_PRIORITY_1, NULL, "wdt_confirm", &s_watchdog_confirm_tcb);
     if (ret != E_OK) {

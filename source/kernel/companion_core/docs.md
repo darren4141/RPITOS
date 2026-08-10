@@ -53,3 +53,30 @@ structure a companion core might still be touching mid-transition
 `.bss`, which the *next* boot's `zero_bss$` wipes before anything reads it
 again, and core 0 doesn't touch any of that shared state itself between
 sending the SGI and jumping to the bootloader.
+
+## Park stack
+
+`_companion_core_park$` (the SGI diversion target above) needs a stack to
+run on, but it must not reuse the abandoned task's own stack: that stack's
+remaining headroom depends entirely on how deep the interrupted task
+happened to be when the IPI landed, and the fresh bring-up chain it's about
+to run (`gic_percore_init`/`gentimer_init`/`scheduler_init`/`task_create`)
+needs real depth of its own. Reusing the abandoned stack produced repeated
+crashes with `TASK_WATERMARK` showing up as a return address — the park
+code was running far enough into the old task's watermark-filled tail that
+it started popping watermark words as saved registers/PC.
+
+The fix is `g_companion_core_park_stack[COMPANION_CORE_MAX_CORES][2048]` — a
+dedicated per-core stack, sized the same as a normal task stack (2048 words)
+for the same reason those are sized that way. It's a global, not `static`,
+because `startup.s` needs to reach it by symbol name (same pattern as
+`scheduler.c`'s `p_task_control_block`).
+
+## Alive mask
+
+`g_core_alive_mask` tracks which cores have been released (bit N = core N
+released, not yet reset) so `companion_core_reset_active()` knows who to
+SGI. Only core 0 ever calls `companion_core_start()`/
+`companion_core_reset_active()` in every current sample, so a plain
+`volatile` is enough — same single-writer reasoning as `uart_task_started`
+in `uart.c`.

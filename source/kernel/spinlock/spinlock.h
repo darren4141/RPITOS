@@ -7,23 +7,13 @@
 
 /**
  * @brief Lamport's Bakery lock for mutual exclusion across cores.
- * @note Uses no atomic hardware instructions (no LDREX/STREX) — this system
- * runs with the MMU disabled, so all memory (including this struct) is
- * Device-nGnRnE, not Normal. LDREX/STREX are architecturally deprecated
- * against Device memory, and the *global* exclusive monitor that lets one
- * core's STREX correctly detect "did another core touch this address"
- * depends on the memory being marked Shareable — an attribute normally only
- * configured via MMU page-table attributes. Confirmed on real hardware: a
- * plain LDREX/STREX ticket lock hung forever (STREX never succeeded) at the
- * very first cross-core acquire. The Bakery algorithm needs only plain
- * volatile loads/stores plus memory barriers, which is exactly what
- * Device-nGnRnE's strongly-ordered semantics already provide.
+ * @note No atomic instructions (LDREX/STREX) — this runs with the MMU off,
+ * and a plain LDREX/STREX ticket lock hung forever on real hardware in that
+ * config. See spinlock/docs.md for why.
  */
 typedef struct {
-  // uint32_t, not a narrower type — Device-nGnRnE memory (the default with
-  // the MMU off) requires word-aligned, word-sized accesses; see
-  // boot_chain.md's StartPacket comment for the same rule elsewhere in this
-  // codebase.
+  // uint32_t, not narrower — Device-nGnRnE (the default with the MMU off)
+  // requires word-aligned, word-sized accesses. See spinlock/docs.md.
   volatile uint32_t choosing[COMPANION_CORE_MAX_CORES];
   volatile uint32_t ticket[COMPANION_CORE_MAX_CORES];
 } Spinlock;

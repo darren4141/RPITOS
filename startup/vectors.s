@@ -1,13 +1,7 @@
 @ ── Shared exception vector table ────────────────────────────────────────────
-@ Included first in each image's .init, so _start lands at the image base and
-@ becomes the value written to VBAR. Every includer (app, bootloader, bootstrap)
-@ defines the eight handler labels these entries branch to: the TABLE is one
-@ source of truth, the HANDLERS stay per-image.
-@
-@ Direct `b label` branches only — never `ldr pc, =label`. A vector table runs
-@ before caches/MMU are configured; the literal-pool read that `ldr pc, =` emits
-@ can silently fail there. `b` is a self-contained relative branch (±32 MB),
-@ which reaches any handler in the image with no memory access.
+@ .include'd first by every image's .init (app/bootloader/bootstrap), each of
+@ which defines its own eight handler labels. Direct `b label` only — never
+@ `ldr pc, =label`, which can silently fail this early (see docs.md).
 .section .init
 .globl _start
 _start:

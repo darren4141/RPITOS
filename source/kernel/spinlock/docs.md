@@ -73,4 +73,17 @@ Not reentrant — do not acquire a `Spinlock` from a context that might already
 hold it on the same core. Lock order matters when more than one is held at
 once: `enter_critical()` → a `Semaphore`/`Mutex`'s own lock → a core's
 `scheduler_lock()`, always in that order, never reversed — see
-`scheduler_lock()`'s doc comment.
+`scheduler/docs.md`'s "Locking model".
+
+## Why pair with `enter_critical()`
+
+`spinlock_acquire()` alone is not enough to guard a critical section against
+same-core preemption: the Bakery lock's `ticket[]` slot is per-*core*, not
+per-task. Without also masking IRQs (`enter_critical()`), a timer tick can
+preempt the holding task mid-critical-section and switch to a different task
+on the *same* core that also calls into the same spinlock — that second
+call's `spinlock_acquire()` overwrites the first task's still-in-use ticket
+slot for that core and proceeds concurrently with it. Every caller in this
+codebase (`heap.c`, `uart.c`, `mutex.c`, `semaphore.c`) wraps
+`spinlock_acquire()`/`spinlock_release()` in `enter_critical()`/`exit_critical()`
+for this reason.

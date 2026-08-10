@@ -6,7 +6,7 @@
 #include "scheduler.h"
 #include "telemetry.h"
 
-void mutex_init(Mutex *mtx)
+void mutex_init(Mutex *mtx, const char *name)
 {
   mtx->mutex_owner                    = NULL;
   mtx->mutex_blocked_list.head        = NULL;
@@ -18,6 +18,12 @@ void mutex_init(Mutex *mtx)
   mtx->inherited_priority             = TASK_PRIORITY_IDLE;
 
   spinlock_init(&mtx->lock);
+
+#ifdef RTOS_TELEMETRY
+  mtx->sync_id = telemetry_register_sync(SYNC_KIND_MUTEX, TELEMETRY_SYNC_ID_NONE, name);
+#else
+  (void)name;
+#endif
 }
 
 // Enable or disable priority inheritance.  Only allowed when the mutex is idle
@@ -67,6 +73,9 @@ StatusCode mutex_lock(Mutex *mtx, int64_t timeout_ms)
       cur_tcb->mutexes_held++;
     }
     spinlock_release(&mtx->lock);
+#ifdef RTOS_TELEMETRY
+    telemetry_report_mutex_owner_changed(mtx->sync_id, 1U, cur_tcb->task_id, cur_tcb->core_id);
+#endif
     exit_critical(cpsr);
     return E_OK;
   }
@@ -88,7 +97,7 @@ StatusCode mutex_lock(Mutex *mtx, int64_t timeout_ms)
   }
   cur_tcb->current_state = TASK_STATE_BLOCKED;
 #ifdef RTOS_TELEMETRY
-  telemetry_report_task_blocked(cur_tcb->task_id, cur_tcb->core_id);
+  telemetry_report_task_blocked(cur_tcb->task_id, cur_tcb->core_id, SYNC_KIND_MUTEX, mtx->sync_id);
 #endif
   scheduler_unlock(cur_tcb->core_id);
 
@@ -144,6 +153,9 @@ void mutex_unlock(Mutex *mtx)
     mtx->mutex_owner        = NULL;
     mtx->state              = MUTEX_STATE_UNLOCKED;
     mtx->inherited_priority = TASK_PRIORITY_IDLE;
+#ifdef RTOS_TELEMETRY
+    telemetry_report_mutex_owner_changed(mtx->sync_id, 0U, 0U, 0U);
+#endif
 
     if (mtx->inheritance_enabled && holder != NULL) {
       holder->mutexes_held--;
@@ -223,6 +235,7 @@ void mutex_unlock(Mutex *mtx)
     scheduler_add_to_ready_list(&next_owner);
 #ifdef RTOS_TELEMETRY
     telemetry_report_task_unblocked(next_owner->task_id, next_owner->core_id);
+    telemetry_report_mutex_owner_changed(mtx->sync_id, 1U, next_owner->task_id, next_owner->core_id);
 #endif
     scheduler_unlock(next_owner->core_id);
   }

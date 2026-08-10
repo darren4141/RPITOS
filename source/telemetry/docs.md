@@ -74,3 +74,56 @@ send one `PKT_HEARTBEAT` every 100th iteration (~10 Hz).
 core's `scheduler_init()` — every core's idle-task setup broadcasts
 `PKT_TASK_CREATED` during `scheduler_init()`, which hangs spinning on
 `FR_TXFF` if it runs against an unconfigured UART.
+
+## Sync primitive tracking
+
+Each mutex/semaphore/queue gets a `sync_id` at init time
+(`telemetry_register_sync()`), which broadcasts `PKT_SYNC_CREATED` once and
+remembers the registration (`TELEMETRY_MAX_SYNC_OBJECTS = 16`, write-once
+entries; `multicore_full_demo` registers 12 today) for later
+re-announcement. All kinds share one id counter, allocated+broadcast
+atomically under `telemetry_lock`. `PKT_MUTEX_OWNER_CHANGED` and the
+`sync_kind`/`sync_id` fields on `PKT_TASK_BLOCKED` ride on the same ids.
+See `md/client/device/sync_view.md` for the full design.
+
+**Why the roster is re-broadcast, not sent once:** `PKT_SYNC_CREATED` fires
+once, early in `kmain()`, squarely inside the power-up/reset line-noise
+window — losing that one frame to a CRC failure meant the object never
+appeared on the host, unlike the self-healing `PKT_TICK_STATE`/
+`PKT_HEARTBEAT` streams. `telemetry_rebroadcast_sync_roster()` re-sends the
+whole roster every ~2s from `telemetry_publisher_task`; idempotent on the
+host side.
+
+**Why each per-entry send in the rebroadcast masks IRQs
+(`enter_critical()`/`exit_critical()`):** `Spinlock` only protects against
+other *cores*, not a same-core IRQ re-entering a lock the interrupted code
+already holds. The multi-frame rebroadcast burst is long enough to reliably
+straddle `telemetry_publisher_task`'s own ~1kHz timer tick, whose handler
+also calls into `telemetry_lock` — sending unmasked let that IRQ splice its
+bytes into an in-flight frame, corrupting it beyond even a CRC-detectable
+failure. Full root-cause trace in `sync_view.md`.
+
+**Why the rebroadcast loop drains the tick rings instead of sleeping
+between frames:** an inter-frame `task_delay_ms(1)` starved this loop's
+caller of its own `telemetry_drain_tick_rings()` calls for ~12ms per
+rebroadcast — long enough to overflow every core's tick ring (depth 8 at
+~1kHz production). Calling `telemetry_drain_tick_rings()` inline keeps the
+same "leave a gap between frames" intent without starving the rings.
+
+## Boot / DFU tracking
+
+Reports boot-stage milestones (`PKT_BOOT_STAGE_ENTER`/`PKT_BOOT_MILESTONE`),
+struct snapshots (`PKT_BOOT_INFO`, discriminated by
+`TelemetryBootInfoSubtype`), and DFU protocol events (`PKT_DFU_EVENT`). See
+`md/client/device/boot_init_tracking.md` for the full design, milestone
+list, and packet layouts.
+
+Two independent senders share the wire framer (`telemetry_frame.c`'s
+`telemetry_send_framed()`, extracted from this file for this purpose) but
+not the locking: `telemetry_boot.c` (bootstrap/bootloader — `UART_MINIMAL`,
+no RTOS, unlocked because both images are single-threaded) and this file's
+own locked wrappers (app side — defined here for API symmetry with
+`telemetry_boot.c`, even though the app only calls the
+stage/milestone/slot-confirmed subset today). Exactly one of the two links
+into any given sample (Makefile's `SAMPLE_TELEMETRY`/
+`SAMPLE_TELEMETRY_BOOT`), so the shared function names never collide.
