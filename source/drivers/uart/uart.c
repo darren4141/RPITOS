@@ -15,50 +15,123 @@
 #include "task_types.h"
 #endif
 
-// ── Hardware init (shared) ────────────────────────────────────────────────────
+// ── Channel table ─────────────────────────────────────────────────────────────
+// SoC-fixed facts, never caller-configurable — see docs.md's "Channel table".
 
-static StatusCode uart_hw_init(UartBaudrate baudrate)
+typedef struct {
+  PL011Regs *regs;
+  uint32_t irq_intid;   // 0 = not wired up / unknown — see docs.md
+} UartHwDescriptor;
+
+#define UART_NUM_CHANNELS 6
+
+static const UartHwDescriptor uart_hw_table[UART_NUM_CHANNELS] = {
+  [0] = { .regs = UART0,                     .irq_intid = UART_IRQ_INTID },
+  [1] = { 0 },                                // mini-UART — different register layout, unsupported
+  [2] = { .regs = (PL011Regs *)0xFE201400UL, .irq_intid = 0 },
+  [3] = { .regs = (PL011Regs *)0xFE201600UL, .irq_intid = 0 },
+  [4] = { .regs = (PL011Regs *)0xFE201800UL, .irq_intid = 0 },
+  [5] = { .regs = (PL011Regs *)0xFE201A00UL, .irq_intid = 0 },
+};
+
+// Set by uart_channel_init(); NULL means that channel isn't configured yet.
+static UartConfig *s_uart_configs[UART_NUM_CHANNELS] = { NULL };
+
+// ── Hardware init (shared across every channel) ──────────────────────────────
+
+static StatusCode uart_baud_divisors(UartBaudrate baudrate, uint32_t *ibrd, uint32_t *fbrd)
 {
-  gpio_set_function(14, GPIO_FUNC_ALT0);
-  gpio_set_function(15, GPIO_FUNC_ALT0);
-  gpio_set_pull(14, GPIO_PULL_NONE);
-  gpio_set_pull(15, GPIO_PULL_NONE);
+  switch (baudrate) {
+  case UART_BAUDRATE_115200:
+    *ibrd = UART_IBRD_115200;
+    *fbrd = UART_FBRD_115200;
+    return E_OK;
 
-  uint32_t val = UART0->CR;
-  val &= ~1U;
-  UART0->CR = val;
+  case UART_BAUDRATE_921600:
+    *ibrd = UART_IBRD_921600;
+    *fbrd = UART_FBRD_921600;
+    return E_OK;
+
+  default:
+    return E_INVALID_ARGS;
+  }
+}
+
+#ifndef UART_MINIMAL
+static uint8_t s_buffered_channel = UART_NUM_CHANNELS;   // sentinel: none yet
+static bool uart_task_started = false;
+#endif
+
+StatusCode uart_channel_init(uint8_t channel, UartConfig *config)
+{
+  if (config == NULL) {
+    return E_INVALID_ARGS;
+  }
+  if (channel >= UART_NUM_CHANNELS || uart_hw_table[channel].regs == NULL) {
+    return E_NOTSUPP;
+  }
+
+  PL011Regs *regs = uart_hw_table[channel].regs;
+
+  gpio_set_function(config->tx_pin, config->alt_func);
+  gpio_set_pull(config->tx_pin, GPIO_PULL_NONE);
+  if (config->rx_pin != UART_PIN_NONE) {
+    gpio_set_function(config->rx_pin, config->alt_func);
+    gpio_set_pull(config->rx_pin, GPIO_PULL_NONE);
+  }
+
+  regs->CR &= ~1U;
 
   uint32_t timeout = 10000;
-  while (UART0->FR & FR_BUSY && timeout > 0) {
+  while ((regs->FR & FR_BUSY) && timeout > 0) {
     timeout--;
   }
   if (timeout == 0) {
     return E_TIMED_OUT;
   }
 
-  UART0->LCRH &= ~LCRH_FEN;
-  UART0->ICR = ICR_ALL;
+  regs->LCRH &= ~LCRH_FEN;
+  regs->ICR = ICR_ALL;
 
-  switch (baudrate) {
-  case UART_BAUDRATE_115200:
-    UART0->IBRD = UART_IBRD_115200;
-    UART0->FBRD = UART_FBRD_115200;
-    break;
-
-  default:
-    return E_INVALID_ARGS;
+  uint32_t ibrd, fbrd;
+  StatusCode ret = uart_baud_divisors(config->baudrate, &ibrd, &fbrd);
+  if (ret != E_OK) {
+    return ret;
   }
+  regs->IBRD = ibrd;
+  regs->FBRD = fbrd;
 
-  UART0->LCRH = LCRH_WLEN_8 | LCRH_FEN;
-  UART0->CR = CR_UARTEN | CR_TXE | CR_RXE;
+  regs->LCRH = LCRH_WLEN_8 | LCRH_FEN;
+  regs->CR = CR_UARTEN | CR_TXE | ((config->rx_pin != UART_PIN_NONE) ? CR_RXE : 0U);
 
+#ifndef UART_MINIMAL
+  if (channel == s_buffered_channel) {
+    uart_task_started = false;
+  }
+#endif
+
+  s_uart_configs[channel] = config;
   return E_OK;
+}
+
+StatusCode uart_init(UartConfig *config)
+{
+  return uart_channel_init(UART_CHANNEL_PRINT, config);
+}
+
+void uart_channel_tx_raw(uint8_t channel, uint8_t byte)
+{
+  if (channel >= UART_NUM_CHANNELS || uart_hw_table[channel].regs == NULL) {
+    return;
+  }
+  PL011Regs *regs = uart_hw_table[channel].regs;
+  while (regs->FR & FR_TXFF) {}
+  regs->DR = byte;
 }
 
 void uart_tx_raw(uint8_t byte)
 {
-  while (UART0->FR & FR_TXFF) {}
-  UART0->DR = byte;
+  uart_channel_tx_raw(UART_CHANNEL_PRINT, byte);
 }
 
 uint8_t uart_rx()
@@ -117,38 +190,6 @@ void uart_deinit()
   gpio_set_function(15, GPIO_FUNC_INPUT);
 }
 
-// ── Dedicated telemetry UART (UART3) — see uart.h and transport_protocol.md ───
-#ifdef RTOS_TELEMETRY
-
-void uart_telemetry_init(void)
-{
-  gpio_set_function(TELEMETRY_UART_TX_PIN, GPIO_FUNC_ALT4);
-  gpio_set_pull(TELEMETRY_UART_TX_PIN, GPIO_PULL_NONE);
-
-  TELEMETRY_UART->CR &= ~1U;   // disable while configuring
-
-  uint32_t timeout = 10000;
-  while (TELEMETRY_UART->FR & FR_BUSY && timeout > 0) {
-    timeout--;
-  }
-
-  TELEMETRY_UART->LCRH &= ~LCRH_FEN;
-  TELEMETRY_UART->ICR = ICR_ALL;
-
-  TELEMETRY_UART->IBRD = TELEMETRY_UART_IBRD_921600;
-  TELEMETRY_UART->FBRD = TELEMETRY_UART_FBRD_921600;
-  TELEMETRY_UART->LCRH = LCRH_WLEN_8 | LCRH_FEN;
-  TELEMETRY_UART->CR = CR_UARTEN | CR_TXE;   // TX only — RX never enabled
-}
-
-void uart_telemetry_tx_raw(uint8_t byte)
-{
-  while (TELEMETRY_UART->FR & FR_TXFF) {}
-  TELEMETRY_UART->DR = byte;
-}
-
-#endif // RTOS_TELEMETRY
-
 // ── Full mode: ring-buffer TX + scheduler task ────────────────────────────────
 #ifndef UART_MINIMAL
 
@@ -162,44 +203,48 @@ static volatile uint32_t uart_buf[UART_BUFFER_SIZE];
 static volatile uint16_t p_uart_buf_left = 0;   // index of last byte consumed
 static volatile uint16_t p_uart_buf_right = 0;  // index of last byte produced
 
-// Guards the reserve-a-slot-and-write step in uart_tx(): enter_critical() alone
-// only stops same-core preemption, so a second core calling uart_send_byte()/
-// uart_print() concurrently would race p_uart_buf_right/uart_buf[] without
-// this. .bss-zeroed initial state is already the unlocked state, so no
-// explicit init call is needed — see heap_lock in heap.c for the same pattern.
+// Guards the reserve-a-slot-and-write step in uart_channel_tx(): enter_critical()
+// alone only stops same-core preemption, so a second core calling
+// uart_channel_send_byte()/uart_channel_print() concurrently would race
+// p_uart_buf_right/uart_buf[] without this. .bss-zeroed initial state is
+// already the unlocked state, so no explicit init call is needed — see
+// heap_lock in heap.c for the same pattern.
 static Spinlock uart_buf_lock;
 
 static TaskControlBlock *uart_tcb = NULL;
-static bool uart_task_started = false;
 
-#if UART_TX_DMA
 static DmaControlBlock uart_tx_cb __attribute__((aligned(32)));
 
 // Launch one DMA transfer of `len` bytes (one word per byte) from the ring
-// buffer to UART0->DR, paced by the UART TX DREQ. The span must be contiguous.
-static void uart_dma_tx_run(const volatile uint32_t *buf, uint16_t len)
+// buffer to the buffered channel's DR, paced by the UART TX DREQ. The span
+// must be contiguous. DMA_DREQ_UART_TX is currently only verified correct for
+// UART0's TX DREQ line — see docs.md before enabling DMA on another channel.
+static void uart_dma_tx_run(uint8_t channel, const volatile uint32_t *buf, uint16_t len)
 {
+  UartConfig *config = s_uart_configs[channel];
   uart_tx_cb.ti = DMA_TI_INTEN | DMA_TI_WAIT_RESP | DMA_TI_DEST_DREQ
                   | DMA_TI_SRC_INC | DMA_TI_PERMAP(DMA_DREQ_UART_TX);
   uart_tx_cb.source_ad = BUS_ADDRESS(buf);
-  uart_tx_cb.dest_ad = UART0_DR_BUS;
+  uart_tx_cb.dest_ad = PERIPHERAL_BUS_ADDRESS(&uart_hw_table[channel].regs->DR);
   uart_tx_cb.txfr_len = (uint32_t)len * 4U;   // 32-bit beats: one word = one byte
   uart_tx_cb.stride = 0;
   uart_tx_cb.nextconbk = 0;
-  dma_start(UART_DMA_TX_CHANNEL, &uart_tx_cb);
+  dma_start(config->dma_channel, &uart_tx_cb);
 }
-#endif
 
-// Called from _irq_handler when the TX DMA channel raises its completion IRQ.
+// Called from _irq_handler when the buffered channel's TX DMA channel raises
+// its completion IRQ.
 void uart_dma_irq_handler(void)
 {
-  volatile DmaChannelRegs *ch = DMA_CHANNEL(UART_DMA_TX_CHANNEL);
+  UartConfig *config = s_uart_configs[s_buffered_channel];
+  volatile DmaChannelRegs *ch = DMA_CHANNEL(config->dma_channel);
   ch->CS = DMA_CS_INT;   // write-1-to-clear the channel interrupt latch
   __asm__ volatile ("dsb sy" ::: "memory");
   semaphore_give(&uart_dma_done);
 }
 
 // ── RX interrupt (replaces polling RX from the scheduler tick) ────────────────
+// RX is print-channel-only today — no other channel ever sets an rx_pin.
 
 // DFU-trigger watch hook, fed unconditionally from uart_rx_irq_handler() below
 // for every byte, on every app — see the call site for why. dfu_trigger.c
@@ -237,80 +282,104 @@ void uart_rx_irq_handler(void)
   UART0->ICR = ICR_RXIC | ICR_RTIC;   // clear the RX + timeout latches
 }
 
-void uart_tx_task(void *params)
+static void uart_tx_task(void *params)
 {
   (void)params;
+  uint8_t channel = s_buffered_channel;
+  UartConfig *config = s_uart_configs[channel];
+
   while (1) {
     semaphore_take(&uart_data_ready, SEMAPHORE_TAKE_BLOCKING);
 
-#if UART_TX_DMA
-    // Drain the ring buffer one contiguous run at a time. A run reaches from the
-    // first unconsumed byte to either the write head or the end of the array
-    // (whichever comes first) — DMA needs a linear span, so wraps split in two.
-    while (p_uart_buf_right != p_uart_buf_left) {
-      uint16_t left = p_uart_buf_left;
-      uint16_t start = (left + 1) % UART_BUFFER_SIZE;
-      uint16_t avail = (uint16_t)((p_uart_buf_right - left + UART_BUFFER_SIZE) % UART_BUFFER_SIZE);
-      uint16_t run = avail;
-      if ((uint32_t)start + run > UART_BUFFER_SIZE) {
-        run = (uint16_t)(UART_BUFFER_SIZE - start);
+    if (config->is_dma_enabled) {
+      // Drain the ring buffer one contiguous run at a time. A run reaches from
+      // the first unconsumed byte to either the write head or the end of the
+      // array (whichever comes first) — DMA needs a linear span, so wraps
+      // split in two.
+      while (p_uart_buf_right != p_uart_buf_left) {
+        uint16_t left = p_uart_buf_left;
+        uint16_t start = (left + 1) % UART_BUFFER_SIZE;
+        uint16_t avail = (uint16_t)((p_uart_buf_right - left + UART_BUFFER_SIZE) % UART_BUFFER_SIZE);
+        uint16_t run = avail;
+        if ((uint32_t)start + run > UART_BUFFER_SIZE) {
+          run = (uint16_t)(UART_BUFFER_SIZE - start);
+        }
+
+        uart_dma_tx_run(channel, &uart_buf[start], run);
+        semaphore_take(&uart_dma_done, SEMAPHORE_TAKE_BLOCKING);
+
+        p_uart_buf_left = (uint16_t)((left + run) % UART_BUFFER_SIZE);
       }
-
-      uart_dma_tx_run(&uart_buf[start], run);
-      semaphore_take(&uart_dma_done, SEMAPHORE_TAKE_BLOCKING);
-
-      p_uart_buf_left = (uint16_t)((left + run) % UART_BUFFER_SIZE);
     }
-#else
-    // Baseline: classic byte-by-byte PIO drain (spins on FR_TXFF per byte).
-    while (p_uart_buf_right != p_uart_buf_left) {
-      p_uart_buf_left = (uint16_t)((p_uart_buf_left + 1) % UART_BUFFER_SIZE);
-      uart_tx_raw((uint8_t)uart_buf[p_uart_buf_left]);
+    else {
+      // Baseline: classic byte-by-byte PIO drain (spins on FR_TXFF per byte).
+      while (p_uart_buf_right != p_uart_buf_left) {
+        p_uart_buf_left = (uint16_t)((p_uart_buf_left + 1) % UART_BUFFER_SIZE);
+        uart_channel_tx_raw(channel, (uint8_t)uart_buf[p_uart_buf_left]);
+      }
     }
-#endif
   }
 }
 
-StatusCode uart_init(UartBaudrate baudrate)
+StatusCode uart_channel_task_start(uint8_t channel)
 {
-  uart_task_started = false;
-  return uart_hw_init(baudrate);
-}
+  if (channel >= UART_NUM_CHANNELS || s_uart_configs[channel] == NULL) {
+    return E_NOT_INITIALIZED;
+  }
 
-StatusCode uart_task_start(void)
-{
+  UartConfig *config = s_uart_configs[channel];
+  if (config->mode != UART_MODE_BUFFERED_TASK) {
+    return E_INVALID_ARGS;
+  }
+  if (uart_task_started && s_buffered_channel != channel) {
+    return E_RESOURCE_EXHAUSTED;   // another channel already owns the shared buffered backend
+  }
+  if (config->rx_pin != UART_PIN_NONE && uart_hw_table[channel].irq_intid == 0) {
+    return E_NOTSUPP;   // this channel's combined IRQ isn't wired up yet — see docs.md
+  }
+
   semaphore_init(&uart_data_ready, 1, 0, "uart_data_ready");
-  semaphore_init(&uart_dma_done, 1, 0, "uart_dma_done");
 
-#if UART_TX_DMA
-  UART0->DMACR = DMACR_TXDMAE;                          // gate TX DREQ to the DMA
-  dma_channel_init(UART_DMA_TX_CHANNEL);
-  irq_register(DMA_IRQ_INTID(UART_DMA_TX_CHANNEL), uart_dma_irq_handler);
-  gic_enable_spi(DMA_IRQ_INTID(UART_DMA_TX_CHANNEL), 0x80);
-#endif
+  if (config->is_dma_enabled) {
+    semaphore_init(&uart_dma_done, 1, 0, "uart_dma_done");
+    uart_hw_table[channel].regs->DMACR = DMACR_TXDMAE;   // gate TX DREQ to the DMA
+    dma_channel_init(config->dma_channel);
+    irq_register(DMA_IRQ_INTID(config->dma_channel), uart_dma_irq_handler);
+    gic_enable_spi(DMA_IRQ_INTID(config->dma_channel), 0x80);
+  }
 
-  // RX interrupts are always enabled here, independent of whether the app
-  // ever calls uart_rx_irq_enable() — this guarantees uart_rx_irq_handler()
-  // (and therefore the built-in DFU-trigger watch inside it) always runs, so
-  // an app can't accidentally ship without DFU recovery support.
-  // RX FIFO threshold stays at reset default (1/8); RTIM catches the tail so
-  // a short burst (e.g. the 4-byte DFU key) is delivered without waiting to fill.
-  UART0->ICR = ICR_ALL;                  // clear any stale latched interrupts
-  UART0->IMSC |= IMSC_RXIM | IMSC_RTIM;  // enable RX-level + RX-timeout
-  irq_register(UART_IRQ_INTID, uart_rx_irq_handler);
-  gic_enable_spi(UART_IRQ_INTID, 0x80);
+  // RX interrupts are always enabled for a channel with an rx_pin, independent
+  // of whether the app ever calls uart_rx_irq_enable() — this guarantees
+  // uart_rx_irq_handler() (and therefore the built-in DFU-trigger watch inside
+  // it) always runs, so an app can't accidentally ship without DFU recovery
+  // support. RX FIFO threshold stays at reset default (1/8); RTIM catches the
+  // tail so a short burst (e.g. the 4-byte DFU key) is delivered without
+  // waiting to fill.
+  if (config->rx_pin != UART_PIN_NONE) {
+    uart_hw_table[channel].regs->ICR = ICR_ALL;                  // clear any stale latched interrupts
+    uart_hw_table[channel].regs->IMSC |= IMSC_RXIM | IMSC_RTIM;  // enable RX-level + RX-timeout
+    irq_register(uart_hw_table[channel].irq_intid, uart_rx_irq_handler);
+    gic_enable_spi(uart_hw_table[channel].irq_intid, 0x80);
+  }
 
-  StatusCode ret = task_create(uart_tx_task, 2048, TASK_PRIORITY_5, NULL, "uart_tx", &uart_tcb);
+  StatusCode ret = task_create(uart_tx_task, config->task_stack_words,
+                                (TaskPriorityLevel)config->task_priority, NULL, "uart_tx", &uart_tcb);
   if (ret == E_OK) {
+    s_buffered_channel = channel;
     uart_task_started = true;
   }
   return ret;
 }
 
-static void uart_tx(uint8_t byte)
+StatusCode uart_task_start(void)
 {
-  if (!uart_task_started) {
-    uart_tx_raw(byte);
+  return uart_channel_task_start(UART_CHANNEL_PRINT);
+}
+
+static void uart_channel_tx(uint8_t channel, uint8_t byte)
+{
+  if (!uart_task_started || channel != s_buffered_channel) {
+    uart_channel_tx_raw(channel, byte);
     return;
   }
   uint16_t next = (p_uart_buf_right + 1) % UART_BUFFER_SIZE;
@@ -321,28 +390,33 @@ static void uart_tx(uint8_t byte)
   p_uart_buf_right = next;
 }
 
-void uart_send_byte(uint8_t byte)
+void uart_channel_send_byte(uint8_t channel, uint8_t byte)
 {
-  if (uart_task_started) {
+  if (uart_task_started && channel == s_buffered_channel) {
     uint32_t cpsr = enter_critical();
     spinlock_acquire(&uart_buf_lock);
-    uart_tx(byte);
+    uart_channel_tx(channel, byte);
     spinlock_release(&uart_buf_lock);
     exit_critical(cpsr);
     semaphore_give(&uart_data_ready);
   }
   else {
-    uart_tx_raw(byte);
+    uart_channel_tx_raw(channel, byte);
   }
 }
 
-void uart_print(const char *str)
+void uart_send_byte(uint8_t byte)
 {
-  if (uart_task_started) {
+  uart_channel_send_byte(UART_CHANNEL_PRINT, byte);
+}
+
+void uart_channel_print(uint8_t channel, const char *str)
+{
+  if (uart_task_started && channel == s_buffered_channel) {
     uint32_t cpsr = enter_critical();
     spinlock_acquire(&uart_buf_lock);
     while (*str) {
-      uart_tx((uint8_t)*str++);
+      uart_channel_tx(channel, (uint8_t)*str++);
     }
     spinlock_release(&uart_buf_lock);
     exit_critical(cpsr);
@@ -350,7 +424,7 @@ void uart_print(const char *str)
   }
   else {
     while (*str) {
-      uart_tx_raw((uint8_t)*str++);
+      uart_channel_tx_raw(channel, (uint8_t)*str++);
     }
   }
 }
@@ -358,26 +432,21 @@ void uart_print(const char *str)
 // ── Minimal mode: blocking TX, no task, no ring buffer ────────────────────────
 #else
 
-StatusCode uart_init(UartBaudrate baudrate)
-{
-  return uart_hw_init(baudrate);
-}
-
-static void uart_tx(uint8_t byte)
-{
-  uart_tx_raw(byte);
-}
-
-void uart_print(const char *str)
+void uart_channel_print(uint8_t channel, const char *str)
 {
   while (*str) {
-    uart_tx_raw((uint8_t)*str++);
+    uart_channel_tx_raw(channel, (uint8_t)*str++);
   }
 }
 
 #endif
 
-// ── Shared: printf (chunked sink, flushed via uart_print) ────────────────────
+void uart_print(const char *str)
+{
+  uart_channel_print(UART_CHANNEL_PRINT, str);
+}
+
+// ── Shared: printf (chunked sink, flushed via uart_channel_print) ────────────
 
 #define PRINTF_CHUNK_SIZE 32
 #define PRINTF_NUM_BUF_SIZE 16   // widest real width in this codebase is %08X
@@ -410,10 +479,11 @@ static int format_uint(char *out, uint32_t n, uint32_t base, const char *digits,
   return len;
 }
 
-// Small fixed-size sink that flushes to uart_print() — one critical section
-// and one semaphore_give per flush — whenever it fills, instead of buffering
-// an entire formatted line on the caller's stack.
+// Small fixed-size sink that flushes to uart_channel_print() — one critical
+// section and one semaphore_give per flush — whenever it fills, instead of
+// buffering an entire formatted line on the caller's stack.
 typedef struct {
+  uint8_t channel;
   char buf[PRINTF_CHUNK_SIZE];
   int pos;
 } PrintfSink;
@@ -422,7 +492,7 @@ static void sink_flush(PrintfSink *sink)
 {
   if (sink->pos > 0) {
     sink->buf[sink->pos] = '\0';
-    uart_print(sink->buf);
+    uart_channel_print(sink->channel, sink->buf);
     sink->pos = 0;
   }
 }
@@ -456,12 +526,9 @@ static void sink_put_uint(PrintfSink *sink, uint32_t n, uint32_t base, const cha
   }
 }
 
-void uart_printf(const char *fmt, ...)
+static void uart_vprintf(uint8_t channel, const char *fmt, va_list args)
 {
-  PrintfSink sink = { .pos = 0 };
-
-  va_list args;
-  va_start(args, fmt);
+  PrintfSink sink = { .channel = channel, .pos = 0 };
 
   while (*fmt) {
     if (*fmt != '%') {
@@ -527,8 +594,23 @@ void uart_printf(const char *fmt, ...)
     fmt++;
   }
 
-  va_end(args);
   sink_flush(&sink);
+}
+
+void uart_channel_printf(uint8_t channel, const char *fmt, ...)
+{
+  va_list args;
+  va_start(args, fmt);
+  uart_vprintf(channel, fmt, args);
+  va_end(args);
+}
+
+void uart_printf(const char *fmt, ...)
+{
+  va_list args;
+  va_start(args, fmt);
+  uart_vprintf(UART_CHANNEL_PRINT, fmt, args);
+  va_end(args);
 }
 
 // Always emits exactly 8 hex digits (no leading-zero trim) via format_uint,

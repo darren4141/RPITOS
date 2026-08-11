@@ -30,6 +30,25 @@ static TaskControlBlock *tcb_low = NULL;
 static TaskControlBlock *tcb_mid = NULL;
 static TaskControlBlock *tcb_high = NULL;
 
+static UartConfig uart_config = {
+  .tx_pin = 14,
+  .rx_pin = 15,
+  .alt_func = GPIO_FUNC_ALT0,
+  .baudrate = UART_BAUDRATE_115200,
+  .mode = UART_MODE_BUFFERED_TASK,
+  .is_dma_enabled = true,
+  .dma_channel = UART_DEFAULT_DMA_CHANNEL,
+  .task_stack_words = 2048,
+  .task_priority = TASK_PRIORITY_5,
+};
+
+static WatchdogConfig watchdog_config = {
+  .timeout_s = 5,
+  .policy = WATCHDOG_RESET_POLICY_FORCE_UPDATE,
+  .tolerance = 2,
+  .confirm_delay_ms = 1000,
+};
+
 // LOW (priority 1): holds the mutex and busy-spins, printing its live priority
 // every PRINT_MS ms so the boost from HIGH is visible in the output.
 void low_task(void *params)
@@ -122,7 +141,7 @@ void kmain(void)
   gpio_set_function(16, GPIO_FUNC_OUTPUT);
   jtag_gpio_init();
 
-  uart_init(UART_BAUDRATE_115200);
+  uart_init(&uart_config);
   uart_print("\r\n=== priority inheritance mutex demo ===\r\n"
              "LOW=priority1  MID=priority2  HIGH=priority3\r\n"
              "LOW holds mutex and busy-spins for 300 ms.\r\n"
@@ -144,12 +163,6 @@ void kmain(void)
   software_timer_init();
   software_timer_start();
 
-  static WatchdogConfig watchdog_config = {
-    .timeout_s = 5,
-    .policy = WATCHDOG_RESET_POLICY_FORCE_UPDATE,
-    .tolerance = 2,
-    .confirm_delay_ms = 1000,
-  };
   watchdog_init(&watchdog_config);
   watchdog_task_start();
 

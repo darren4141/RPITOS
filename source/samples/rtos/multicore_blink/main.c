@@ -29,6 +29,31 @@ static TaskControlBlock *tcb_uart2 = NULL;
 static volatile uint32_t core1_clk_freq;
 static volatile uint64_t core1_tick_count = 0;
 
+// is_dma_enabled stays false here (was -DUART_TX_DMA=0) — see config.mk:
+// this sample was isolating watchdog/software_timer presence as the
+// multicore-hang differentiator, not the TX path.
+static UartConfig uart_config = {
+  .tx_pin = 14,
+  .rx_pin = 15,
+  .alt_func = GPIO_FUNC_ALT0,
+  .baudrate = UART_BAUDRATE_115200,
+  .mode = UART_MODE_BUFFERED_TASK,
+  .is_dma_enabled = false,
+  .task_stack_words = 2048,
+  .task_priority = TASK_PRIORITY_5,
+};
+
+static CompanionCoreContext cc_ctx;
+
+static WatchdogConfig watchdog_config = {
+  .timeout_s = 5,
+  .policy = WATCHDOG_RESET_POLICY_FORCE_UPDATE,
+  .tolerance = 1,
+  .confirm_delay_ms = 1000,
+  .multicore_mode = true,
+  .companion_core_ctx = &cc_ctx,
+};
+
 // Each core 1 task also uart_printf()s on its own toggle — three more UART
 // producers alongside core 0's two (see README's uart_buf_lock stress note).
 static void led16_task(void *params)
@@ -134,23 +159,14 @@ void kmain(void)
 {
   jtag_gpio_init();
 
-  uart_init(UART_BAUDRATE_115200);
+  uart_init(&uart_config);
   uart_print("\r\n=== multicore_blink (BMP) ===\r\n"
              "core 0: RTOS, 2 tasks printing periodic UART messages\r\n"
              "core 1: its own RTOS scheduler, 3 tasks blinking GPIO 16/20/21"
              " and each printing over UART\r\n\r\n");
 
-  static CompanionCoreContext cc_ctx;
   companion_core_init(&cc_ctx);
 
-  static WatchdogConfig watchdog_config = {
-    .timeout_s = 5,
-    .policy = WATCHDOG_RESET_POLICY_FORCE_UPDATE,
-    .tolerance = 1,
-    .confirm_delay_ms = 1000,
-    .multicore_mode = true,
-    .companion_core_ctx = &cc_ctx,
-  };
   watchdog_init(&watchdog_config);
 
   scheduler_init(0, &clk_freq, hz, &tick_count);

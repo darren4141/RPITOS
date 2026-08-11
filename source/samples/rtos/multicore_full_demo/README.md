@@ -45,8 +45,8 @@ the mutex/semaphore/queue workload:
   **dedicated UART3 instance (GPIO4, 921600 baud, TX-only, raw blocking
   writes)** — a completely separate wire from UART0/the console, so it's
   never interleaved with `uart_print`/`uart_printf` debug output from
-  cores 0-2. See `uart_telemetry_init()`/`uart_telemetry_tx_raw()` in the
-  `uart` driver.
+  cores 0-2. See `uart_channel_init()`/`uart_channel_tx_raw()` (channel
+  `UART_CHANNEL_TELEMETRY`) in the `uart` driver.
 
 ## What it does
 

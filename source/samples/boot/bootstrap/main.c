@@ -11,13 +11,31 @@
 // the bootstrap free of boot-domain dependencies).
 #define BOOTLOADER_LOAD_ADDR 0x10000U
 
+static UartConfig uart_config = {
+  .tx_pin = 14,
+  .rx_pin = 15,
+  .alt_func = GPIO_FUNC_ALT0,
+  .baudrate = UART_BAUDRATE_115200,
+  .mode = UART_MODE_BLOCKING,
+};
+
+#ifdef RTOS_TELEMETRY
+static UartConfig telemetry_uart_config = {
+  .tx_pin = 4,
+  .rx_pin = UART_PIN_NONE,
+  .alt_func = GPIO_FUNC_ALT4,
+  .baudrate = UART_BAUDRATE_921600,
+  .mode = UART_MODE_BLOCKING,
+};
+#endif
+
 void kmain(void)
 {
-  uart_init(UART_BAUDRATE_115200);
+  uart_init(&uart_config);
   uart_print("bootstrap: starting\r\n");
 
 #ifdef RTOS_TELEMETRY
-  uart_telemetry_init();
+  uart_channel_init(UART_CHANNEL_TELEMETRY, &telemetry_uart_config);
   telemetry_report_boot_stage_enter(BOOT_STAGE_BOOTSTRAP);
 #endif
 

@@ -25,6 +25,25 @@ static const uint32_t hz = 1000;   // 1 kHz tick → 1 tick == 1 ms
 static TaskControlBlock *tcb_demo = NULL;
 static TaskControlBlock *tcb_spawner = NULL;
 
+static UartConfig uart_config = {
+  .tx_pin = 14,
+  .rx_pin = 15,
+  .alt_func = GPIO_FUNC_ALT0,
+  .baudrate = UART_BAUDRATE_115200,
+  .mode = UART_MODE_BUFFERED_TASK,
+  .is_dma_enabled = true,
+  .dma_channel = UART_DEFAULT_DMA_CHANNEL,
+  .task_stack_words = 2048,
+  .task_priority = TASK_PRIORITY_5,
+};
+
+static WatchdogConfig watchdog_config = {
+  .timeout_s = 5,
+  .policy = WATCHDOG_RESET_POLICY_FORCE_UPDATE,
+  .tolerance = 2,
+  .confirm_delay_ms = 1000,
+};
+
 // Software timers live in static storage — the kernel does no dynamic allocation.
 static SoftwareTimer heartbeat_timer;   // periodic  250 ms — toggles the LED
 static SoftwareTimer fast_timer;        // periodic  500 ms
@@ -154,7 +173,7 @@ void kmain(void)
   gpio_set_function(LED_PIN, GPIO_FUNC_OUTPUT);
   jtag_gpio_init();
 
-  uart_init(UART_BAUDRATE_115200);
+  uart_init(&uart_config);
   uart_print("\r\n=== software timer demo ===\r\n"
              "heartbeat 250ms toggles the LED; fast/medium/slow print at\r\n"
              "500ms / 1s / 2s; a one-shot fires once at 5s. At 8s the fast\r\n"
@@ -171,12 +190,6 @@ void kmain(void)
   task_create(demo_task, 2048, TASK_PRIORITY_1, NULL, "demo", &tcb_demo);
   task_create(spawner_task, 2048, TASK_PRIORITY_2, NULL, "spawner", &tcb_spawner);
 
-  static WatchdogConfig watchdog_config = {
-    .timeout_s = 5,
-    .policy = WATCHDOG_RESET_POLICY_FORCE_UPDATE,
-    .tolerance = 2,
-    .confirm_delay_ms = 1000,
-  };
   watchdog_init(&watchdog_config);
   watchdog_task_start();
 

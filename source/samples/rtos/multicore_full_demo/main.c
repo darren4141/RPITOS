@@ -59,6 +59,39 @@ static volatile uint64_t core2_tick_count = 0;
 static volatile uint32_t core3_clk_freq;
 static volatile uint64_t core3_tick_count = 0;
 
+static UartConfig uart_config = {
+  .tx_pin = 14,
+  .rx_pin = 15,
+  .alt_func = GPIO_FUNC_ALT0,
+  .baudrate = UART_BAUDRATE_115200,
+  .mode = UART_MODE_BUFFERED_TASK,
+  .is_dma_enabled = true,
+  .dma_channel = UART_DEFAULT_DMA_CHANNEL,
+  .task_stack_words = 2048,
+  .task_priority = TASK_PRIORITY_5,
+};
+
+#ifdef RTOS_TELEMETRY
+static UartConfig telemetry_uart_config = {
+  .tx_pin = 4,
+  .rx_pin = UART_PIN_NONE,
+  .alt_func = GPIO_FUNC_ALT4,
+  .baudrate = UART_BAUDRATE_921600,
+  .mode = UART_MODE_BLOCKING,
+};
+#endif
+
+static CompanionCoreContext cc_ctx;
+
+static WatchdogConfig watchdog_config = {
+  .timeout_s = 5,
+  .policy = WATCHDOG_RESET_POLICY_FORCE_UPDATE,
+  .tolerance = 1,
+  .confirm_delay_ms = 1000,
+  .multicore_mode = true,
+  .companion_core_ctx = &cc_ctx,
+};
+
 // Busy-spins the calling task for roughly ms milliseconds — real RUNNING
 // time, not a blocking delay (see README).
 static void busy_work_ms(uint64_t ms)
@@ -239,8 +272,9 @@ static void core3_kmain(void)
 {
   gic_percore_init();
   gentimer_init(&core3_clk_freq, hz);
-  // uart_telemetry_init() (core 0's kmain()) must already have run — every
-  // core's idle-task setup broadcasts over telemetry during scheduler_init().
+  // uart_channel_init(UART_CHANNEL_TELEMETRY, ...) (core 0's kmain()) must
+  // already have run — every core's idle-task setup broadcasts over
+  // telemetry during scheduler_init().
   scheduler_init(3U, &core3_clk_freq, hz, &core3_tick_count);
   watchdog_core_task_start();
 
@@ -255,11 +289,11 @@ void kmain(void)
 {
   jtag_gpio_init();
 
-  uart_init(UART_BAUDRATE_115200);
+  uart_init(&uart_config);
 
 #ifdef RTOS_TELEMETRY
   // Must run before any core's scheduler_init() — see instrumentation.md.
-  uart_telemetry_init();
+  uart_channel_init(UART_CHANNEL_TELEMETRY, &telemetry_uart_config);
   telemetry_report_boot_stage_enter(BOOT_STAGE_APP);
 
   // Re-broadcast boot_flags here — the bootloader's one-shot PKT_BOOT_INFO
@@ -276,17 +310,8 @@ void kmain(void)
              "core 2: RTOS — mutex counter + queue sender\r\n"
              "core 3: telemetry publisher (dedicated, no app tasks)\r\n\r\n");
 
-  static CompanionCoreContext cc_ctx;
   companion_core_init(&cc_ctx);
 
-  static WatchdogConfig watchdog_config = {
-    .timeout_s = 5,
-    .policy = WATCHDOG_RESET_POLICY_FORCE_UPDATE,
-    .tolerance = 1,
-    .confirm_delay_ms = 1000,
-    .multicore_mode = true,
-    .companion_core_ctx = &cc_ctx,
-  };
   watchdog_init(&watchdog_config);
 
   scheduler_init(0, &clk_freq, hz, &tick_count);
