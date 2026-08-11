@@ -65,8 +65,17 @@ typedef struct {
 #define DMA_IRQ_INTID(ch)      (112U + (uint32_t)(ch))
 
 // VideoCore bus alias for RAM — see docs.md if the mem→mem self-test fails.
+// Only valid for RAM addresses (e.g. a DMA source buffer). NOT valid for
+// peripheral MMIO registers — see PERIPHERAL_BUS_ADDRESS() below for those.
 #define DMA_BUS_ALIAS          0xC0000000U
 #define BUS_ADDRESS(a)         (((uint32_t)(uintptr_t)(a) & ~0xC0000000U) | DMA_BUS_ALIAS)
+
+// VideoCore bus alias for a low-peripheral-mode MMIO register (BCM2711
+// ARM-physical 0xFCxxxxxx/0xFExxxxxx <-> VC bus 0x7Exxxxxx — same low 24
+// bits). Use this for a DMA control block's peripheral dest_ad/source_ad
+// (e.g. a UART DR register); BUS_ADDRESS() above computes a different,
+// RAM-only alias and silently targets the wrong bus address if used here.
+#define PERIPHERAL_BUS_ADDRESS(a) (((uint32_t)(uintptr_t)(a) & 0x00FFFFFFU) | 0x7E000000U)
 
 // Control block — 8 words, must be 32-byte aligned and reside in DMA-visible RAM.
 typedef struct {

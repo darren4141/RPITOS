@@ -134,7 +134,7 @@ typedef enum {
 
 /**
  * @brief Frame and transmit one telemetry packet on the dedicated telemetry UART.
- * @note uart_telemetry_init() must have run first.
+ * @note uart_channel_init(UART_CHANNEL_TELEMETRY, ...) must have run first.
  * @note Safe to call from any core — internally locked (telemetry_lock, telemetry.c).
  */
 void telemetry_send(TelemetryPacketType type, const uint8_t *payload, uint8_t len);
@@ -203,7 +203,7 @@ void telemetry_report_mutex_owner_changed(uint16_t sync_id, uint8_t has_owner, u
 // (app, locked) — exactly one links per sample. See docs.md.
 
 /**
- * @brief Report entry into a boot stage (bootstrap/bootloader/app). Call once, right after uart_telemetry_init().
+ * @brief Report entry into a boot stage (bootstrap/bootloader/app). Call once, right after uart_channel_init(UART_CHANNEL_TELEMETRY, ...).
  */
 void telemetry_report_boot_stage_enter(TelemetryBootStage stage);
 

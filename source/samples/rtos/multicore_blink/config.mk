@@ -14,6 +14,6 @@ SAMPLE_BOOT_COMPONENTS := dfu_trigger boot_flags
 # Utility libraries
 SAMPLE_LIBS            :=
 
-# UART_TX_DMA stays disabled (unchanged from before) — only the
-# watchdog/software_timer presence is being varied in this test.
-SAMPLE_EXTRA_CFLAGS := -DUART_TX_DMA=0
+# DMA TX stays disabled here (main.c's UartConfig.is_dma_enabled = false) —
+# only the watchdog/software_timer presence is being varied in this test.
+SAMPLE_EXTRA_CFLAGS :=

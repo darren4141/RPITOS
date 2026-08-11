@@ -36,18 +36,18 @@ void telemetry_send_framed(TelemetryPacketType type, const uint8_t *payload, uin
   uint32_t crc = crc32_finish(&ctx);
 
   for (uint8_t i = 0; i < sizeof(header); i++) {
-    uart_telemetry_tx_raw(header[i]);
+    uart_channel_tx_raw(UART_CHANNEL_TELEMETRY, header[i]);
   }
   for (uint8_t i = 0; i < len; i++) {
-    uart_telemetry_tx_raw(payload[i]);
+    uart_channel_tx_raw(UART_CHANNEL_TELEMETRY, payload[i]);
   }
 
-  uart_telemetry_tx_raw((uint8_t)(crc & 0xFFU));           // CRC32 LE
-  uart_telemetry_tx_raw((uint8_t)((crc >> 8) & 0xFFU));
-  uart_telemetry_tx_raw((uint8_t)((crc >> 16) & 0xFFU));
-  uart_telemetry_tx_raw((uint8_t)((crc >> 24) & 0xFFU));
+  uart_channel_tx_raw(UART_CHANNEL_TELEMETRY, (uint8_t)(crc & 0xFFU));           // CRC32 LE
+  uart_channel_tx_raw(UART_CHANNEL_TELEMETRY, (uint8_t)((crc >> 8) & 0xFFU));
+  uart_channel_tx_raw(UART_CHANNEL_TELEMETRY, (uint8_t)((crc >> 16) & 0xFFU));
+  uart_channel_tx_raw(UART_CHANNEL_TELEMETRY, (uint8_t)((crc >> 24) & 0xFFU));
 
-  uart_telemetry_tx_raw(TELEMETRY_TRAILER);
+  uart_channel_tx_raw(UART_CHANNEL_TELEMETRY, TELEMETRY_TRAILER);
 }
 
 #endif // RTOS_TELEMETRY

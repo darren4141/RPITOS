@@ -1,6 +1,7 @@
 #ifndef UART_H
 #define UART_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "gpio.h"
@@ -59,21 +60,14 @@ typedef struct {
 #define DMACR_TXDMAE        (1 << 1) // TX DMA enable
 #define DMACR_DMAONERR      (1 << 2) // disable DMA on RX error
 
-// VideoCore bus alias of UART0->DR — see docs.md.
-#define UART0_DR_BUS        0x7E201000UL
-
-// DMA Lite channel used for UART TX — see docs.md before changing.
-#define UART_DMA_TX_CHANNEL 7
+// Suggested default DMA channel for a buffered UartConfig — see docs.md.
+#define UART_DEFAULT_DMA_CHANNEL 7
 
 // PL011 UART0 combined interrupt → GIC INTID on BCM2711 — see docs.md before changing.
 #define UART_IRQ_INTID      153
 
-// See docs.md for what these build-time flags do.
+// See docs.md for what this build-time flag does.
 #ifndef UART_MINIMAL
-#ifndef UART_TX_DMA
-#define UART_TX_DMA         1
-#endif
-
 #ifndef UART_TX_TIMING
 #define UART_TX_TIMING      0
 #endif
@@ -83,19 +77,56 @@ typedef struct {
 
 #define UART_IBRD_115200    26
 #define UART_FBRD_115200    3
+#define UART_IBRD_921600    3
+#define UART_FBRD_921600    16
 
 typedef enum {
-  UART_BAUDRATE_115200
+  UART_BAUDRATE_115200,
+  UART_BAUDRATE_921600,
 } UartBaudrate;
 
 #define UART0               ((PL011Regs *)UART0_BASE)
 
 #define UART_BUFFER_SIZE    2056
 
+// Sentinel for UartConfig.rx_pin — TX-only channel, no RX pin/IRQ set up.
+#define UART_PIN_NONE       0xFFU
+
+// Literal BCM2711 UART numbering — see docs.md's "Channel table" section.
+#define UART_CHANNEL_PRINT      0U
+#define UART_CHANNEL_TELEMETRY  3U
+
+typedef enum {
+  UART_MODE_BLOCKING,        // always direct MMIO poll, no ring buffer/task
+  UART_MODE_BUFFERED_TASK,   // ring buffer + semaphore + task (+ optional DMA)
+} UartMode;
+
 /**
- * @brief Configure the PL011 UART's GPIO pins, baud rate, and line control.
+ * @brief Per-channel UART configuration; see docs.md's "Channel table" section.
+ * @note Pointer-owned by the caller — see docs.md for storage-duration rules.
  */
-StatusCode uart_init(UartBaudrate baudrate);
+typedef struct {
+  uint8_t tx_pin;
+  uint8_t rx_pin;             // UART_PIN_NONE for TX-only
+  GPIOFunc alt_func;
+  UartBaudrate baudrate;
+  UartMode mode;
+  bool is_dma_enabled;        // only meaningful when mode == UART_MODE_BUFFERED_TASK
+  uint8_t dma_channel;
+  uint16_t task_stack_words;
+  uint8_t task_priority;
+} UartConfig;
+
+/**
+ * @brief Configure a UART channel's GPIO pins, baud rate, and line control.
+ * @note channel is the literal BCM2711 UART number (0, 2-5; 1 is the mini-UART, unsupported).
+ */
+StatusCode uart_channel_init(uint8_t channel, UartConfig *config);
+
+/**
+ * @brief Configure the print UART's (UART0) GPIO pins, baud rate, and line control.
+ */
+StatusCode uart_init(UartConfig *config);
 
 /**
  * @brief Drain the TX FIFO, disable the UART, and release its GPIO pins.
@@ -108,16 +139,42 @@ void uart_deinit();
 void uart_drain(void);
 
 /**
+ * @brief Transmit a single raw byte on `channel`, blocking until its TX FIFO has room.
+ */
+void uart_channel_tx_raw(uint8_t channel, uint8_t byte);
+
+/**
  * @brief Transmit a single raw byte, blocking until the TX FIFO has room.
  */
 void uart_tx_raw(uint8_t byte);
 
+/**
+ * @brief Write a NUL-terminated string on `channel`.
+ */
+void uart_channel_print(uint8_t channel, const char *str);
+
+/**
+ * @brief Write a printf-style formatted string on `channel`. Supports %c %s %d %u %x %X %% with zero-padding and width.
+ */
+void uart_channel_printf(uint8_t channel, const char *fmt, ...);
+
 #ifndef UART_MINIMAL
 
 /**
- * @brief Start the ring-buffer TX task and enable RX interrupts (full mode only).
+ * @brief Start `channel`'s ring-buffer TX task (only valid when its config's mode is UART_MODE_BUFFERED_TASK).
+ * @note Only one channel may be buffered at a time — returns E_RESOURCE_EXHAUSTED if another already is.
+ */
+StatusCode uart_channel_task_start(uint8_t channel);
+
+/**
+ * @brief Start the print channel's ring-buffer TX task and enable RX interrupts (full mode only).
  */
 StatusCode uart_task_start(void);
+
+/**
+ * @brief Queue a byte for transmission via `channel`'s ring buffer (only meaningful if it's the buffered channel).
+ */
+void uart_channel_send_byte(uint8_t channel, uint8_t byte);
 
 /**
  * @brief Queue a byte for transmission via the ring buffer (full mode only).
@@ -172,28 +229,6 @@ uint64_t uart_tx_get_active_cycles(void);
 uint64_t uart_tx_get_byte_count(void);
 #endif
 #endif
-
-#ifdef RTOS_TELEMETRY
-// Dedicated telemetry UART — UART3, separate PL011 instance from UART0/console.
-// See md/client/transport_protocol.md.
-#define TELEMETRY_UART_BASE        0xFE201600UL   // UART3 PL011
-#define TELEMETRY_UART_TX_PIN      4U             // GPIO4, ALT4 (TXD3)
-
-#define TELEMETRY_UART_IBRD_921600 3U              // 921600 baud @ UARTCLK 48 MHz
-#define TELEMETRY_UART_FBRD_921600 16U
-
-#define TELEMETRY_UART             ((PL011Regs *)TELEMETRY_UART_BASE)
-
-/**
- * @brief Configure the dedicated telemetry UART (UART3, GPIO4, TX-only) at 921600 baud.
- */
-void uart_telemetry_init(void);
-
-/**
- * @brief Transmit a single raw byte on the dedicated telemetry UART, blocking until its TX FIFO has room.
- */
-void uart_telemetry_tx_raw(uint8_t byte);
-#endif // RTOS_TELEMETRY
 
 /**
  * @brief Read one byte, blocking until the RX FIFO is non-empty.

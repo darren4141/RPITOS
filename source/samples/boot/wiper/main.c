@@ -7,9 +7,17 @@
 
 #define BOOTLOADER_LOAD_ADDR 0x10000U
 
+static UartConfig uart_config = {
+  .tx_pin = 14,
+  .rx_pin = 15,
+  .alt_func = GPIO_FUNC_ALT0,
+  .baudrate = UART_BAUDRATE_115200,
+  .mode = UART_MODE_BLOCKING,
+};
+
 void kmain(void)
 {
-  uart_init(UART_BAUDRATE_115200);
+  uart_init(&uart_config);
   uart_print("wiper: starting\r\n");
 
   StatusCode ret = emmc_init();

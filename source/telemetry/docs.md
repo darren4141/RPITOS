@@ -64,13 +64,13 @@ a dropped-record warning, rather than needing a dedicated overflow packet.
 ## `telemetry_publisher_task`
 
 Runs alone on a dedicated core (core 3 in `multicore_full_demo` — see its
-README) so blocking, unbuffered `uart_telemetry_tx_raw()` writes cost it
-nothing. Loop: drain every core's tick-ring every iteration (~1 kHz), plus
-send one `PKT_HEARTBEAT` every 100th iteration (~10 Hz).
+README) so blocking, unbuffered `uart_channel_tx_raw(UART_CHANNEL_TELEMETRY, ...)`
+writes cost it nothing. Loop: drain every core's tick-ring every iteration
+(~1 kHz), plus send one `PKT_HEARTBEAT` every 100th iteration (~10 Hz).
 
 ## Bootstrap ordering
 
-`uart_telemetry_init()` (see `uart/docs.md`) must run once, before any
+`uart_channel_init(UART_CHANNEL_TELEMETRY, ...)` (see `uart/docs.md`) must run once, before any
 core's `scheduler_init()` — every core's idle-task setup broadcasts
 `PKT_TASK_CREATED` during `scheduler_init()`, which hangs spinning on
 `FR_TXFF` if it runs against an unconfigured UART.

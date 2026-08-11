@@ -128,7 +128,7 @@ bool watchdog_was_wdt_reset(void)
 
 StatusCode watchdog_init(WatchdogConfig *config)
 {
-  if (config == NULL || config->timeout_s == 0) {
+  if ((config == NULL) || (config->timeout_s == 0)) {
     return E_INVALID_ARGS;
   }
   if (config->timeout_s > PM_WDOG_MAX_TIMEOUT) {
@@ -156,13 +156,28 @@ void watchdog_kick(void)
   PM_WDOG = PM_PASSWORD | s_timeout_ticks;
 }
 
+// WATCHDOG_MINIMAL builds (bootloader) are always single-core
+#ifdef WATCHDOG_MINIMAL
+
 StatusCode watchdog_core_kick(void)
 {
   if (s_config == NULL) {
     return E_NOT_INITIALIZED;
   }
 
-  if (!s_config->multicore_mode || s_config->companion_core_ctx == NULL) {
+  watchdog_kick();
+  return E_OK;
+}
+
+#else
+
+StatusCode watchdog_core_kick(void)
+{
+  if (s_config == NULL) {
+    return E_NOT_INITIALIZED;
+  }
+
+  if (!s_config->multicore_mode || (s_config->companion_core_ctx == NULL)) {
     watchdog_kick();
     return E_OK;
   }
@@ -183,6 +198,8 @@ StatusCode watchdog_core_kick(void)
   watchdog_kick();
   return E_OK;
 }
+
+#endif
 
 void watchdog_disable(void)
 {
@@ -292,7 +309,7 @@ StatusCode watchdog_core_task_start(void)
   if (s_config == NULL) {
     return E_NOT_INITIALIZED;
   }
-  if (!s_config->multicore_mode || s_config->companion_core_ctx == NULL) {
+  if (!s_config->multicore_mode || (s_config->companion_core_ctx == NULL)) {
     return E_INVALID_ARGS;
   }
 

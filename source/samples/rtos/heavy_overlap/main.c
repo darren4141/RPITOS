@@ -39,6 +39,25 @@ static TaskControlBlock *tcb_5 = NULL;
 
 static StatusCode ret;
 
+static UartConfig uart_config = {
+  .tx_pin = 14,
+  .rx_pin = 15,
+  .alt_func = GPIO_FUNC_ALT0,
+  .baudrate = UART_BAUDRATE_115200,
+  .mode = UART_MODE_BUFFERED_TASK,
+  .is_dma_enabled = true,
+  .dma_channel = UART_DEFAULT_DMA_CHANNEL,
+  .task_stack_words = 2048,
+  .task_priority = TASK_PRIORITY_5,
+};
+
+static WatchdogConfig watchdog_config = {
+  .timeout_s = 5,
+  .policy = WATCHDOG_RESET_POLICY_FORCE_UPDATE,
+  .tolerance = 3,
+  .confirm_delay_ms = 1000,
+};
+
 static void core1_blink(void)
 {
   gpio_set_function(LED_PIN_CORE1, GPIO_FUNC_OUTPUT);
@@ -131,7 +150,7 @@ void kmain(void)
   gpio_set_function(16, GPIO_FUNC_OUTPUT);
   jtag_gpio_init();
 
-  uart_init(UART_BAUDRATE_115200);
+  uart_init(&uart_config);
   uart_print("uart initialized!\r\n");
 
   scheduler_init(0, &clk_freq, hz, &tick_count);
@@ -173,12 +192,6 @@ void kmain(void)
   software_timer_init();
   software_timer_start();
 
-  static WatchdogConfig watchdog_config = {
-    .timeout_s = 5,
-    .policy = WATCHDOG_RESET_POLICY_FORCE_UPDATE,
-    .tolerance = 3,
-    .confirm_delay_ms = 1000,
-  };
   watchdog_init(&watchdog_config);
   ret = watchdog_task_start();
   if (ret != E_OK) {
