@@ -177,6 +177,49 @@ address, read the value" idiom:
   opt-in rather than default. Worth keeping in mind if a repeated-start
   transfer misbehaves on real hardware — it may not be this driver's bug.
 
+**Confirmed on real hardware, not just a theoretical risk:** the first real
+`i2c_channel_write_read()` call in this project (`pwm_pca9685_init()`
+reading `MODE1`) hung exactly this way — `S` read back `TA` still asserted
+with `DONE`/`ERR`/`CLKT` all clear after the full final wait budget, i.e.
+the write phase and the repeated-start hand-off both happened but nothing
+ever completed. `pwm_pca9685.c` no longer uses this function for its
+register reads (two independent transactions instead — see its own
+docs.md); `i2c_channel_write_read()` itself is unchanged and still
+available for a caller whose peripheral genuinely requires a true repeated
+start, but treat this as a real, reproduced failure mode, not a hypothetical
+one, before relying on it.
+
+## Timeout paths force-disable the controller
+
+Every `E_TIMED_OUT` return in `i2c_channel_write()`/`read()`/`write_read()`
+(and `i2c_channel_init()`'s own pre-reconfigure `S_TA` wait) now writes
+`regs->C = 0` before returning, unconditionally. Without this, a transfer
+that leaves `TA` stuck (see above) permanently wedges the channel — every
+future call, including `i2c_channel_init()` re-running after a reboot,
+would hang the same way forever, since nothing ever forced the engine back
+to a known state. This is best-effort recovery only: it resets this BSC
+engine's own state, it can't un-stick a slave that's physically holding
+`SDA` low. A real bus-recovery routine (bit-bang up to 9 clocks on `SCL`
+while watching `SDA`, per the I2C spec) would be needed for that case and
+doesn't exist here yet.
+
+## Zero-length transfers (`len == 0`) are rejected
+
+`i2c_channel_write()`/`i2c_channel_read()` return `E_INVALID_ARGS` for
+`len == 0` rather than programming `DLEN=0`. This isn't from a datasheet or
+kernel-driver citation — it's empirical: an early version of a bus-scan
+helper used a 0-byte write per address (the classic `i2cdetect` probe
+technique) and got a deterministic-looking but meaningless result — every
+*other* address in the loop reported ACK, regardless of address value,
+identically on two physically separate buses. That pattern only makes sense
+as an artifact of the scan itself, not real devices. The likely mechanism:
+neither function waits for `S_TA` to settle before returning (unlike
+`i2c_channel_init()`/`deinit()`, which do), and a degenerate zero-length
+transfer's tail end apparently overlaps with the next call's `C.ST` when
+issued back-to-back with no gap. Rather than chase the exact hardware
+behavior further, `len == 0` is simply rejected — a bus scan should use a
+1-byte read instead (see the technique note above).
+
 ## Open items — verify before implementing
 
 - **BSC core clock frequency for CM4.** `DIV` is computed from the BSC's

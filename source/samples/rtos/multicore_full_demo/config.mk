@@ -1,5 +1,7 @@
-# Drivers to compile. reset = enter_bootloader for the DFU trigger.
-SAMPLE_DRIVERS         := gpio uart gentimer gic jtag reset interrupts dma watchdog emmc crc
+# Drivers to compile. reset = enter_bootloader for the DFU trigger. mailbox is
+# i2c's dependency (BSC core clock query); pwm_pca9685 is the PCA9685 PWM
+# driver built on top of i2c.
+SAMPLE_DRIVERS         := gpio uart gentimer gic jtag reset interrupts dma watchdog emmc crc i2c mailbox pwm_pca9685
 
 # RTOS kernel components — full set, including companion_core (per-core
 # scheduler bring-up) and the synchronization primitives this sample exists

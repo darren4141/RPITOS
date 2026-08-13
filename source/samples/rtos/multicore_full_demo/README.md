@@ -30,6 +30,16 @@ the mutex/semaphore/queue workload:
   blocks on `g_data_ready_sem`, "processes" (busy work, ~1800 ms —
   deliberately longer than the producer's), then gives the ack back. Strict
   alternation: while one side works, the other is always blocked.
+- **PCA9685 blink** (`pca_blink_task`, core 0) — drives a PCA9685 PWM/LED
+  controller over `I2C_CHANNEL_3` (GPIO4/5, ALT5), toggling its PWM output
+  channels 4 and 5 together between full-on and full-off at 1 Hz. Not part of
+  the cross-core synchronization story the rest of this sample demonstrates —
+  it's here as a real-hardware smoke test for the `i2c`/`pwm_pca9685` drivers
+  under the same multicore/scheduler load as everything else. `i2c_channel_init()`
+  runs in `kmain()` (no task-context requirement); `pwm_pca9685_init()` runs
+  at the top of `pca_blink_task()` itself, since it blocks on `task_delay_ms()`
+  for the datasheet's post-SLEEP-clear settle time and so needs to run as a
+  task, not from `kmain()` before `scheduler_start()` — see `pwm_pca9685/docs.md`.
 - **Grind** (`grind_task`, one per app core 0-2) — a CPU-bound filler that
   busy-spins ~50 ms then delays 15 ms, keeping each core genuinely busy
   between the lighter-weight demo tasks' delays so contention/idle-time
@@ -52,7 +62,7 @@ the mutex/semaphore/queue workload:
 
 | Core | Behaviour |
 |---|---|
-| 0 | `mutex_counter_task` + `ping_task` (gives the semaphore every 500 ms) + `queue_recv_task` (blocks on the queue) + `grind_task` |
+| 0 | `mutex_counter_task` + `ping_task` (gives the semaphore every 500 ms) + `queue_recv_task` (blocks on the queue) + `grind_task` + `pca_blink_task` (PCA9685 channels 4/5, 1 Hz) |
 | 1 | `mutex_counter_task` + `pong_task` (blocks on the semaphore) + `handshake_producer_task` + `grind_task` |
 | 2 | `mutex_counter_task` + `queue_send_task` (sends every 150 ms) + `handshake_consumer_task` + `grind_task` |
 | 3 | `telemetry_publisher_task` only — dedicated, no RTOS-under-test tasks |
@@ -71,7 +81,7 @@ Output: `build/rtos/multicore_full_demo/multicore_full_demo.elf / .img / .hex`
 
 ## Components used
 
-- **Drivers**: `gpio`, `uart`, `gentimer`, `gic`, `jtag`, `reset`, `interrupts`, `dma`, `watchdog`, `emmc`, `crc`
+- **Drivers**: `gpio`, `uart`, `gentimer`, `gic`, `jtag`, `reset`, `interrupts`, `dma`, `watchdog`, `emmc`, `crc`, `i2c`, `mailbox`, `pwm_pca9685`
 - **Kernel**: `scheduler`, `task`, `semaphore`, `mutex`, `queue`, `heap`, `companion_core`, `spinlock`, `software_timer`
 - **Boot library**: `dfu_trigger`, `boot_flags`
 - **Telemetry**: `telemetry` (gated by `-DRTOS_TELEMETRY`, see `config.mk`)

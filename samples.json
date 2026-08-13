@@ -9,6 +9,7 @@
     "rtos/mutex_inheritance",
     "rtos/software_timer",
     "rtos/multicore_blink",
-    "rtos/multicore_full_demo"
+    "rtos/multicore_full_demo",
+    "rtos/pwm_fade_demo"
   ]
 }

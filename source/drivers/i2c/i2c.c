@@ -48,12 +48,24 @@ static const I2cHwDescriptor i2c_hw_table[I2C_NUM_CHANNELS] = {
 // Set by i2c_channel_init(); NULL means that channel isn't configured yet.
 static I2cConfig *s_i2c_configs[I2C_NUM_CHANNELS] = { NULL };
 
+// Raw S value as of the last i2c_channel_write()/read()/write_read() return
+// on that channel — debug aid only, see i2c_channel_last_status().
+static uint32_t s_i2c_last_status[I2C_NUM_CHANNELS] = { 0 };
+
 static inline BSCRegs *i2c_channel_regs(uint8_t channel)
 {
   if ((channel >= I2C_NUM_CHANNELS) || (i2c_hw_table[channel].regs == NULL)) {
     return NULL;
   }
   return i2c_hw_table[channel].regs;
+}
+
+uint32_t i2c_channel_last_status(uint8_t channel)
+{
+  if (channel >= I2C_NUM_CHANNELS) {
+    return 0;
+  }
+  return s_i2c_last_status[channel];
 }
 
 StatusCode i2c_channel_init(uint8_t channel, I2cConfig *config)
@@ -69,13 +81,15 @@ StatusCode i2c_channel_init(uint8_t channel, I2cConfig *config)
   }
 
   // Disable before reconfiguring — protects a re-init call from reprogramming
-  // DIV/pins out from under a transfer that's still active.
+  // DIV/pins out from under a transfer that's still active. Disabled
+  // unconditionally, even if TA never clears: bailing out here instead would
+  // permanently wedge the channel if a previous transfer left TA stuck (e.g.
+  // a clock-stretch hang during a repeated-start hand-off, see docs.md) —
+  // this is the only recovery lever available at this level (it resets our
+  // own engine's state; it can't un-stick a slave physically holding the bus).
   uint32_t timeout = 10000;
   while ((regs->S & S_TA) && timeout > 0) {
     timeout--;
-  }
-  if (timeout == 0) {
-    return E_TIMED_OUT;
   }
   regs->C = 0;
 
@@ -141,6 +155,9 @@ void i2c_channel_deinit(uint8_t channel)
 
 StatusCode i2c_channel_write(uint8_t channel, uint8_t addr, const uint8_t *buf, uint16_t len)
 {
+  if (len == 0) {
+    return E_INVALID_ARGS;   // DLEN=0 is unreliable on this hardware — see docs.md
+  }
   if (s_i2c_configs[channel] == NULL) {
     return E_NOT_INITIALIZED;
   }
@@ -178,13 +195,16 @@ StatusCode i2c_channel_write(uint8_t channel, uint8_t addr, const uint8_t *buf, 
   }
 
   uint32_t status = regs->S;
+  s_i2c_last_status[channel] = status;
   if (status & S_CLKT) {
+    regs->C = 0;   // force-disable — see i2c_channel_init()'s comment on why
     return E_TIMED_OUT;
   }
   if (status & S_ERR) {
     return E_DATA;
   }
   if (!(status & S_DONE)) {
+    regs->C = 0;   // force-disable — see i2c_channel_init()'s comment on why
     return E_TIMED_OUT;   // neither loop above ever saw DONE
   }
 
@@ -193,6 +213,9 @@ StatusCode i2c_channel_write(uint8_t channel, uint8_t addr, const uint8_t *buf, 
 
 StatusCode i2c_channel_read(uint8_t channel, uint8_t addr, uint8_t *buf, uint16_t len)
 {
+  if (len == 0) {
+    return E_INVALID_ARGS;   // DLEN=0 is unreliable on this hardware — see docs.md
+  }
   if (s_i2c_configs[channel] == NULL) {
     return E_NOT_INITIALIZED;
   }
@@ -230,13 +253,16 @@ StatusCode i2c_channel_read(uint8_t channel, uint8_t addr, uint8_t *buf, uint16_
   }
 
   uint32_t status = regs->S;
+  s_i2c_last_status[channel] = status;
   if (status & S_CLKT) {
+    regs->C = 0;   // force-disable — see i2c_channel_init()'s comment on why
     return E_TIMED_OUT;
   }
   if (status & S_ERR) {
     return E_DATA;
   }
   if (!(status & S_DONE)) {
+    regs->C = 0;   // force-disable — see i2c_channel_init()'s comment on why
     return E_TIMED_OUT;   // neither loop above ever saw DONE
   }
 
@@ -282,10 +308,13 @@ StatusCode i2c_channel_write_read(uint8_t channel, uint8_t addr,
     timeout--;
   }
   uint32_t status = regs->S;
+  s_i2c_last_status[channel] = status;
   if (timeout == 0) {
+    regs->C = 0;   // force-disable — see i2c_channel_init()'s comment on why
     return E_TIMED_OUT;
   }
   if (status & S_CLKT) {
+    regs->C = 0;   // force-disable — see i2c_channel_init()'s comment on why
     return E_TIMED_OUT;
   }
   if (status & S_ERR) {
@@ -317,13 +346,16 @@ StatusCode i2c_channel_write_read(uint8_t channel, uint8_t addr,
   }
 
   status = regs->S;
+  s_i2c_last_status[channel] = status;
   if (status & S_CLKT) {
+    regs->C = 0;   // force-disable — see i2c_channel_init()'s comment on why
     return E_TIMED_OUT;
   }
   if (status & S_ERR) {
     return E_DATA;
   }
   if (!(status & S_DONE)) {
+    regs->C = 0;   // force-disable — see i2c_channel_init()'s comment on why
     return E_TIMED_OUT;   // neither loop above ever saw DONE
   }
 

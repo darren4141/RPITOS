@@ -99,11 +99,13 @@ void i2c_channel_deinit(uint8_t channel);
 
 /**
  * @brief Write len bytes to the 7-bit slave address addr, blocking until done.
+ * @note len == 0 returns E_INVALID_ARGS — DLEN=0 is unreliable on this hardware, see docs.md.
  */
 StatusCode i2c_channel_write(uint8_t channel, uint8_t addr, const uint8_t *buf, uint16_t len);
 
 /**
  * @brief Read len bytes from the 7-bit slave address addr, blocking until done.
+ * @note len == 0 returns E_INVALID_ARGS — DLEN=0 is unreliable on this hardware, see docs.md.
  */
 StatusCode i2c_channel_read(uint8_t channel, uint8_t addr, uint8_t *buf, uint16_t len);
 
@@ -118,5 +120,13 @@ StatusCode i2c_channel_read(uint8_t channel, uint8_t addr, uint8_t *buf, uint16_
 StatusCode i2c_channel_write_read(uint8_t channel, uint8_t addr,
                                   const uint8_t *tx_buf, uint16_t tx_len,
                                   uint8_t *rx_buf, uint16_t rx_len);
+
+/**
+ * @brief Return the raw S register value as of channel's last write()/read()/write_read() return.
+ * @note Debug aid only — decode against the S_* bitmasks above (S_TA, S_DONE,
+ * S_ERR, S_CLKT, S_RXD, S_TXD, ...). Returns 0 for an invalid channel or one
+ * that's never had a transfer.
+ */
+uint32_t i2c_channel_last_status(uint8_t channel);
 
 #endif
