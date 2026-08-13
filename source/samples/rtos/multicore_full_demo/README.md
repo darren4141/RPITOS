@@ -42,7 +42,7 @@ the mutex/semaphore/queue workload:
   (magic/type/seq/len/payload/CRC32/trailer) — the trivial packet type
   Phase 1 of that plan calls for, to validate framing, CRC, and sequence
   numbering before any real scheduler data rides on it. Goes out over a
-  **dedicated UART3 instance (GPIO4, 921600 baud, TX-only, raw blocking
+  **dedicated UART5 instance (GPIO12, 921600 baud, TX-only, raw blocking
   writes)** — a completely separate wire from UART0/the console, so it's
   never interleaved with `uart_print`/`uart_printf` debug output from
   cores 0-2. See `uart_channel_init()`/`uart_channel_tx_raw()` (channel

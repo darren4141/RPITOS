@@ -6,7 +6,9 @@ Two build modes, selected by `UART_MINIMAL`:
 
 - **Full mode** (default): a channel configured with `UART_MODE_BUFFERED_TASK`
   gets ring-buffer TX drained by a scheduler task, RX by interrupt, DFU-trigger
-  watch built in (print channel only, today).
+  watch built in. RX interrupts are only ever enabled for whichever channel
+  owns the shared buffered backend (the print channel, today) — see "Channel
+  table" below.
 - **Minimal mode** (`UART_MINIMAL` defined, used by the bootloader): every
   channel is always blocking TX — no task, no ring buffer, no RX interrupt,
   regardless of what `mode` a config asks for.
@@ -14,14 +16,27 @@ Two build modes, selected by `UART_MINIMAL`:
 ## Channel table
 
 The SoC has 6 UART slots; the driver indexes by the literal BCM2711 UART
-number (`UART_CHANNEL_PRINT` = 0, `UART_CHANNEL_TELEMETRY` = 3). Index 1 is
+number (`UART_CHANNEL_PRINT` = 0, `UART_CHANNEL_TELEMETRY` = 5). Index 1 is
 the mini-UART — a completely different, non-PL011 register layout — and is a
 permanent, unsupported gap (`uart_channel_init(1, ...)` returns `E_NOTSUPP`).
-Base addresses for channels 2/4/5 are filled in (spaced `0x200` apart from
-UART0/UART3) but are placeholders: nothing wires them up or exercises them
-today, and their combined IRQ INTIDs are left `0` (unknown) — verify against
-the datasheet before ever using one. `uart_channel_task_start()` refuses
-RX-interrupt setup on a channel whose `irq_intid` is `0`.
+Base addresses for channels 2/3/4 are filled in (spaced `0x200` apart from
+UART0/UART5, matching the datasheet's UART2/3/4/5 layout) but are
+placeholders: nothing wires them up or exercises them today, and their
+combined IRQ INTIDs are left `0` (unknown) — verify against the datasheet
+before ever using one. `uart_channel_task_start()` refuses RX-interrupt setup
+on a channel whose `irq_intid` is `0`. Channel 5's TX pin is confirmed
+against the datasheet: TXD5 = GPIO12/ALT4 (telemetry is TX-only, so RXD5/
+GPIO13 is unused and unverified).
+
+Every entry point (`uart_channel_tx_raw`, `uart_channel_rx`/`_nonblocking`/
+`_timed`, `uart_channel_drain`, `uart_channel_deinit`, `uart_channel_print`/
+`_printf`, `uart_channel_send_byte`) takes `channel` and resolves its `regs`
+from `uart_hw_table` — no function hardcodes UART0. `uart_rx()`, `uart_drain()`,
+`uart_deinit()`, etc. (no `channel` argument) are thin wrappers that pass
+`UART_CHANNEL_PRINT`, mirroring the existing `uart_print()`/`uart_tx_raw()`
+wrappers. `uart_channel_deinit()` reads the pins to release from that
+channel's stored `UartConfig` (`s_uart_configs[channel]`) rather than
+assuming GPIO14/15.
 
 `UartConfig` is caller-owned, static/global storage duration — same
 pointer-ownership rule as `WatchdogConfig` (see `watchdog/docs.md`). Two
@@ -90,3 +105,12 @@ at `uart_channel_task_start()` time for whatever INTID the channel's
 special-cases GIC ID 30 (the scheduler tick) directly; everything else,
 including DMA TX and UART RX, is a runtime table lookup. No `startup.s`
 changes are needed when a channel's DMA channel or IRQ INTID changes.
+
+`uart_dma_irq_handler()`/`uart_rx_irq_handler()` both resolve which channel
+fired by reading the static `s_buffered_channel`, not an argument (the
+generic `IrqHandler` signature is `void (*)(void)`). `uart_channel_task_start()`
+sets `s_buffered_channel = channel` *before* calling `gic_enable_spi()` for
+either interrupt — setting it after (as the DMA path briefly did) leaves a
+window where an interrupt can fire while `s_buffered_channel` still holds the
+init-time sentinel (`UART_NUM_CHANNELS`), which is an out-of-bounds
+`uart_hw_table[]` read.

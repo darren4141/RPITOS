@@ -318,7 +318,7 @@ StatusCode dfu_receive()
         // Throttled to ~1%-of-img_length steps (~100 packets/transfer
         // regardless of image size) — DFU is single-threaded and ACK-gated,
         // so an event per 256-byte CMD_DATA chunk (up to ~32k for an 8MB app)
-        // would add that many blocking UART3 writes onto the flashing hot
+        // would add that many blocking UART5 writes onto the flashing hot
         // path. See md/client/device/boot_init_tracking.md.
         if (img_length > 0) {
           uint32_t pct = (bytes_hashed * 100U) / img_length;

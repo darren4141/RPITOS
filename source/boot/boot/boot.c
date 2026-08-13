@@ -108,7 +108,7 @@ void boot_jump_to_app()
 #endif
 
   // Wait for UART PL011 TX FIFO to drain before jumping
-  while (UART0->FR & FR_BUSY) {}
+  uart_drain();
 
   // disable interrupts so bootloader IRQs do not fire in the app
   asm volatile ("cpsid if" ::: "memory");
