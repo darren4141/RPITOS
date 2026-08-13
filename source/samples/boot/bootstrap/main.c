@@ -21,7 +21,7 @@ static UartConfig uart_config = {
 
 #ifdef RTOS_TELEMETRY
 static UartConfig telemetry_uart_config = {
-  .tx_pin = 4,
+  .tx_pin = 12,
   .rx_pin = UART_PIN_NONE,
   .alt_func = GPIO_FUNC_ALT4,
   .baudrate = UART_BAUDRATE_921600,

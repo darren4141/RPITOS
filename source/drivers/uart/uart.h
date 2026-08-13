@@ -7,94 +7,96 @@
 #include "gpio.h"
 #include "status.h"
 
-#define UART0_BASE          0xFE201000UL
+#define UART0_BASE               0xFE201000UL
+#define UART2_BASE               0xFE201400UL
+#define UART3_BASE               0xFE201600UL
+#define UART4_BASE               0xFE201800UL
+#define UART5_BASE               0xFE201A00UL
 
 typedef struct {
-  volatile uint32_t DR;              // 0x00 — data register (TX/RX)
-  volatile uint32_t RSRECR;          // 0x04 — receive status / error clear
-  volatile uint32_t PAD[4];          // 0x08–0x14 — reserved
-  volatile uint32_t FR;              // 0x18 — flag register (TX/RX ready/busy)
-  volatile uint32_t PAD2;            // 0x1C — reserved
-  volatile uint32_t ILPR;            // 0x20 — IrDA low power (unused)
-  volatile uint32_t IBRD;            // 0x24 — integer baud rate divisor
-  volatile uint32_t FBRD;            // 0x28 — fractional baud rate divisor
-  volatile uint32_t LCRH;            // 0x2C — line control (data bits, FIFO, parity)
-  volatile uint32_t CR;              // 0x30 — control (enable TX/RX)
-  volatile uint32_t IFLS;            // 0x34 — FIFO interrupt level select
-  volatile uint32_t IMSC;            // 0x38 — interrupt mask set/clear
-  volatile uint32_t RIS;             // 0x3C — raw interrupt status
-  volatile uint32_t MIS;             // 0x40 — masked interrupt status
-  volatile uint32_t ICR;             // 0x44 — interrupt clear register
-  volatile uint32_t DMACR;           // 0x48 — DMA control (unused)
+  volatile uint32_t DR;                   // 0x00 — data register (TX/RX)
+  volatile uint32_t RSRECR;               // 0x04 — receive status / error clear
+  volatile uint32_t PAD[4];               // 0x08–0x14 — reserved
+  volatile uint32_t FR;                   // 0x18 — flag register (TX/RX ready/busy)
+  volatile uint32_t PAD2;                 // 0x1C — reserved
+  volatile uint32_t ILPR;                 // 0x20 — IrDA low power (unused)
+  volatile uint32_t IBRD;                 // 0x24 — integer baud rate divisor
+  volatile uint32_t FBRD;                 // 0x28 — fractional baud rate divisor
+  volatile uint32_t LCRH;                 // 0x2C — line control (data bits, FIFO, parity)
+  volatile uint32_t CR;                   // 0x30 — control (enable TX/RX)
+  volatile uint32_t IFLS;                 // 0x34 — FIFO interrupt level select
+  volatile uint32_t IMSC;                 // 0x38 — interrupt mask set/clear
+  volatile uint32_t RIS;                  // 0x3C — raw interrupt status
+  volatile uint32_t MIS;                  // 0x40 — masked interrupt status
+  volatile uint32_t ICR;                  // 0x44 — interrupt clear register
+  volatile uint32_t DMACR;                // 0x48 — DMA control (unused)
 } PL011Regs;
 
 // FR — flag register
-#define FR_TXFF             (1 << 5) // TX FIFO full  — don't write if set
-#define FR_RXFE             (1 << 4) // RX FIFO empty — don't read if set
-#define FR_BUSY             (1 << 3) // TX busy       — wait before disabling
+#define FR_TXFF                  (1 << 5) // TX FIFO full  — don't write if set
+#define FR_RXFE                  (1 << 4) // RX FIFO empty — don't read if set
+#define FR_BUSY                  (1 << 3) // TX busy       — wait before disabling
 
 // LCRH — line control
-#define LCRH_WLEN_8         (3 << 5) // 8 data bits
-#define LCRH_WLEN_7         (2 << 5) // 7 data bits
-#define LCRH_FEN            (1 << 4) // enable FIFOs
-#define LCRH_STP2           (1 << 3) // 2 stop bits (0 = 1 stop bit)
-#define LCRH_PEN            (1 << 1) // parity enable
+#define LCRH_WLEN_8              (3 << 5) // 8 data bits
+#define LCRH_WLEN_7              (2 << 5) // 7 data bits
+#define LCRH_FEN                 (1 << 4) // enable FIFOs
+#define LCRH_STP2                (1 << 3) // 2 stop bits (0 = 1 stop bit)
+#define LCRH_PEN                 (1 << 1) // parity enable
 
 // CR — control register
-#define CR_RXE              (1 << 9) // RX enable
-#define CR_TXE              (1 << 8) // TX enable
-#define CR_UARTEN           (1 << 0) // UART enable
+#define CR_RXE                   (1 << 9) // RX enable
+#define CR_TXE                   (1 << 8) // TX enable
+#define CR_UARTEN                (1 << 0) // UART enable
 
 // IMSC — interrupt masks
-#define IMSC_RXIM           (1 << 4) // RX FIFO ≥ threshold interrupt mask
-#define IMSC_TXIM           (1 << 5) // TX interrupt mask
-#define IMSC_RTIM           (1 << 6) // RX timeout interrupt mask (catches FIFO tail)
+#define IMSC_RXIM                (1 << 4) // RX FIFO ≥ threshold interrupt mask
+#define IMSC_TXIM                (1 << 5) // TX interrupt mask
+#define IMSC_RTIM                (1 << 6) // RX timeout interrupt mask (catches FIFO tail)
 
 // ICR — interrupt clear (write 1 to clear)
-#define ICR_ALL             0x7FF    // clear all interrupts
-#define ICR_RXIC            (1 << 4) // clear RX interrupt
-#define ICR_RTIC            (1 << 6) // clear RX timeout interrupt
+#define ICR_ALL                  0x7FF    // clear all interrupts
+#define ICR_RXIC                 (1 << 4) // clear RX interrupt
+#define ICR_RTIC                 (1 << 6) // clear RX timeout interrupt
 
 // DMACR — DMA control
-#define DMACR_RXDMAE        (1 << 0) // RX DMA enable
-#define DMACR_TXDMAE        (1 << 1) // TX DMA enable
-#define DMACR_DMAONERR      (1 << 2) // disable DMA on RX error
+#define DMACR_RXDMAE             (1 << 0) // RX DMA enable
+#define DMACR_TXDMAE             (1 << 1) // TX DMA enable
+#define DMACR_DMAONERR           (1 << 2) // disable DMA on RX error
 
 // Suggested default DMA channel for a buffered UartConfig — see docs.md.
 #define UART_DEFAULT_DMA_CHANNEL 7
 
 // PL011 UART0 combined interrupt → GIC INTID on BCM2711 — see docs.md before changing.
-#define UART_IRQ_INTID      153
+#define UART_IRQ_INTID           153
 
 // See docs.md for what this build-time flag does.
 #ifndef UART_MINIMAL
 #ifndef UART_TX_TIMING
-#define UART_TX_TIMING      0
+#define UART_TX_TIMING           0
 #endif
 #endif
 
-#define UART_CLK            48000000
+#define UART_CLK                 48000000
 
-#define UART_IBRD_115200    26
-#define UART_FBRD_115200    3
-#define UART_IBRD_921600    3
-#define UART_FBRD_921600    16
+#define UART_IBRD_115200         26
+#define UART_FBRD_115200         3
+#define UART_IBRD_921600         3
+#define UART_FBRD_921600         16
 
 typedef enum {
   UART_BAUDRATE_115200,
   UART_BAUDRATE_921600,
 } UartBaudrate;
 
-#define UART0               ((PL011Regs *)UART0_BASE)
-
-#define UART_BUFFER_SIZE    2056
+#define UART_BUFFER_SIZE         2056
 
 // Sentinel for UartConfig.rx_pin — TX-only channel, no RX pin/IRQ set up.
-#define UART_PIN_NONE       0xFFU
+#define UART_PIN_NONE            0xFFU
 
 // Literal BCM2711 UART numbering — see docs.md's "Channel table" section.
-#define UART_CHANNEL_PRINT      0U
-#define UART_CHANNEL_TELEMETRY  3U
+#define UART_CHANNEL_PRINT       0U
+#define UART_CHANNEL_TELEMETRY   5U
 
 typedef enum {
   UART_MODE_BLOCKING,        // always direct MMIO poll, no ring buffer/task
@@ -129,9 +131,19 @@ StatusCode uart_channel_init(uint8_t channel, UartConfig *config);
 StatusCode uart_init(UartConfig *config);
 
 /**
+ * @brief Drain the TX FIFO, disable `channel`'s UART, and release its GPIO pins.
+ */
+void uart_channel_deinit(uint8_t channel);
+
+/**
  * @brief Drain the TX FIFO, disable the UART, and release its GPIO pins.
  */
 void uart_deinit();
+
+/**
+ * @brief Block until `channel`'s TX FIFO has fully drained.
+ */
+void uart_channel_drain(uint8_t channel);
 
 /**
  * @brief Block until the TX FIFO has fully drained.
@@ -231,15 +243,34 @@ uint64_t uart_tx_get_byte_count(void);
 #endif
 
 /**
+ * @brief Read one byte on `channel`, blocking until its RX FIFO is non-empty.
+ * @note Returns 0 for an unsupported/out-of-range channel — there's no error
+ * path for the non-Status return, so check the channel is valid before relying on it.
+ */
+uint8_t uart_channel_rx(uint8_t channel);
+
+/**
  * @brief Read one byte, blocking until the RX FIFO is non-empty.
  */
 uint8_t uart_rx();
+
+/**
+ * @brief Read one byte on `channel` if available, without blocking.
+ * @return E_EMPTY if the RX FIFO is empty, E_NOTSUPP for an invalid channel.
+ */
+StatusCode uart_channel_rx_nonblocking(uint8_t channel, uint8_t *out);
 
 /**
  * @brief Read one byte if available, without blocking.
  * @return E_EMPTY if the RX FIFO is empty.
  */
 StatusCode uart_rx_nonblocking(uint8_t *out);
+
+/**
+ * @brief Read one byte on `channel`, blocking up to timeout_ms.
+ * @return E_TIMED_OUT if no byte arrives in time, E_NOTSUPP for an invalid channel.
+ */
+StatusCode uart_channel_rx_timed(uint8_t channel, uint8_t *out, uint32_t timeout_ms);
 
 /**
  * @brief Read one byte, blocking up to timeout_ms.
