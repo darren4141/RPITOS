@@ -5,10 +5,7 @@
 
 #include "status.h"
 
-// NXP/TI PCA9685 16-channel, 12-bit PWM I2C LED/servo controller, built on
-// top of this project's i2c driver. Register map and prescale formula are
-// public PCA9685 datasheet facts, not project-specific hardware — see
-// docs.md for the rest.
+// NXP/TI PCA9685 16-channel, 12-bit PWM I2C LED/servo controller — see docs.md.
 
 // ── Register map ──────────────────────────────────────────────────────────────
 #define PCA9685_MODE1            0x00U
@@ -46,10 +43,6 @@
 
 /**
  * @brief Per-instance PCA9685 configuration.
- * @note Pointer-owned by the caller, static/global storage duration — same
- * rule as UartConfig/I2cConfig. channel is the literal BCM2711 I2C number
- * (see i2c/docs.md) the chip is wired to; it must already be initialized via
- * i2c_channel_init() before pwm_pca9685_init() is called.
  */
 typedef struct {
   uint8_t channel;
@@ -77,11 +70,6 @@ StatusCode pwm_pca9685_is_initialized(void);
 
 /**
  * @brief Set one channel's pulse phase (delay) and width (duty_cycle), each a fraction of UINT32_MAX.
- * @note delay=0/duty_cycle=UINT32_MAX means "high the whole period starting
- * at tick 0". Replaces the original float-based (0.0-1.0) API with uint32_t
- * scaled over its full range — no float math anywhere in this driver, since
- * no FPU context is saved across task switches in this kernel (see CLAUDE.md).
- * Scaled internally to the PCA9685's 12-bit tick resolution.
  * @return E_INVALID_ARGS if delay + duty_cycle overflows UINT32_MAX (the
  * scaled equivalent of the original's delay_percentage + duty_cycle > 1.0 check).
  */

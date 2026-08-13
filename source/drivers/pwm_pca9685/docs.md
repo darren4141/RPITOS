@@ -20,6 +20,11 @@ this driver doesn't own or check that itself — `i2c_channel_write()`/
 `i2c_channel_read()` already return `E_NOT_INITIALIZED` if it wasn't, so
 there's nothing to duplicate here.
 
+`pca9685_write_reg()`/`pca9685_read_reg()` take `channel`/`i2c_addr` as
+explicit arguments rather than reading them from `s_config`, since
+`pwm_pca9685_init()` uses both before it commits `s_config` (only set on
+success, at the end of `pwm_pca9685_init()`).
+
 `pca9685_read_reg()` (used once, for `MODE1` during init) does a plain
 `i2c_channel_write()` then `i2c_channel_read()` — two independent
 transactions with a STOP in between — not `i2c_channel_write_read()`'s
@@ -32,8 +37,15 @@ same STOP-then-START way (`Wire.endTransmission()` defaults to sending a
 STOP, then `requestFrom()` is a fresh START). If a future change here needs
 the repeated-start form for some other reason, re-read that section first.
 `pwm_pca9685_init()` also logs which specific step failed (register,
-raw `S` value) via `uart_printf()` if any I2C call in the sequence fails —
-see the comment on `pca9685_init_step_failed()`.
+raw `S` value) via `uart_printf()` if any I2C call in the sequence fails.
+Decode the logged `S` value against `i2c.h`'s `S_*` bitmasks: `S_ERR` is a
+NACK, `S_CLKT` a clock-stretch timeout, and `0x00` alongside a timeout
+return means the transaction never registered any status at all.
+
+`pwm_pca9685_init()`'s post-SLEEP-clear settle delay uses a single
+`task_delay_ms(1)` because one scheduler tick is >= the datasheet's 500us
+minimum on every `hz` this project's samples use (`hz=1000` -> 1ms/tick);
+revisit if a much higher tick rate is ever configured.
 
 Only one PCA9685 instance is supported (single static `s_config`), matching
 the original driver's scope — no handle/multi-instance support. Revisit if a

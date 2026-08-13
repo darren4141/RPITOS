@@ -7,26 +7,18 @@
 #include "scheduler.h"   // task_delay_ms()
 #include "uart.h"        // debug prints in pwm_pca9685_init()'s failure path
 
-// Set by pwm_pca9685_init(); NULL means not initialized. Caller-owned,
-// static/global storage duration — same ownership rule as UartConfig/I2cConfig.
+// Set by pwm_pca9685_init(); NULL means not initialized — see docs.md.
 static Pca9685Config *s_config = NULL;
 
-// Both helpers take channel/addr explicitly (not read from s_config) so
-// pwm_pca9685_init() can use them before committing s_config — see its
-// comment for why.
+// Take channel/addr explicitly, not from s_config — see docs.md.
 static StatusCode pca9685_write_reg(uint8_t channel, uint8_t i2c_addr, uint8_t reg, uint8_t value)
 {
   uint8_t buf[2] = { reg, value };
   return i2c_channel_write(channel, i2c_addr, buf, 2);
 }
 
-// Deliberately two independent transactions (STOP between them), not
-// i2c_channel_write_read()'s repeated-start technique — the PCA9685 doesn't
-// need a true repeated start for a register read (Adafruit's widely-used
-// PCA9685 library does the equivalent of this same STOP-then-START sequence
-// via Wire.endTransmission()/requestFrom()), and the repeated-start hand-off
-// is real hardware's less-verified path — see i2c/docs.md's "Repeated start"
-// section for why that matters here specifically.
+// Two independent transactions, not a repeated start — see docs.md's
+// "Ownership and prerequisites".
 static StatusCode pca9685_read_reg(uint8_t channel, uint8_t i2c_addr, uint8_t reg, uint8_t *out_value)
 {
   StatusCode ret = i2c_channel_write(channel, i2c_addr, &reg, 1);
@@ -41,11 +33,8 @@ StatusCode pwm_pca9685_is_initialized(void)
   return (s_config != NULL) ? E_OK : E_NOT_INITIALIZED;
 }
 
-// Logs which init step failed and the raw I2C status at that point (decode
-// against i2c.h's S_* bitmasks — S_ERR is a NACK, S_CLKT a clock-stretch
-// timeout, and 0x00 with a timeout return means the transaction never
-// registered any status at all). Returns ret unchanged so call sites can
-// just `return pca9685_init_step_failed(...)`.
+// Logs which init step failed and the raw I2C status — see docs.md for how
+// to decode it. Returns ret unchanged so callers can `return pca9685_init_step_failed(...)`.
 static StatusCode pca9685_init_step_failed(uint8_t channel, const char *step, StatusCode ret)
 {
   uart_printf("pwm_pca9685: init step '%s' failed: ret=%d S=0x%02X\r\n",
@@ -78,8 +67,7 @@ StatusCode pwm_pca9685_init(Pca9685Config *config)
   }
 
   // PRE_SCALE = round(osc_clock / (4096 * update_rate)) - 1 — datasheet
-  // formula. Integer round-to-nearest via +denom/2 before dividing, then
-  // subtract 1 (rounding commutes with subtracting a whole number).
+  // formula, integer round-to-nearest (see docs.md).
   uint32_t denom = PCA9685_TICK_MAX * config->pwm_freq_hz;
   uint32_t prescale = (PCA9685_OSC_CLOCK_HZ + (denom / 2U)) / denom;
   uint8_t prescale_val = (uint8_t)(prescale - 1U);
@@ -94,9 +82,8 @@ StatusCode pwm_pca9685_init(Pca9685Config *config)
     return pca9685_init_step_failed(channel, "write MODE1 (clear sleep)", ret);
   }
 
-  // Datasheet: wait >= 500us after clearing SLEEP before setting RESTART.
-  // One scheduler tick is >= that on every hz this project's samples use
-  // (hz=1000 -> 1ms/tick); revisit if a much higher tick rate is ever configured.
+  // Datasheet: wait >= 500us after clearing SLEEP before RESTART — see
+  // docs.md for the tick-rate assumption behind this delay.
   task_delay_ms(1);
 
   ret = pca9685_write_reg(channel, i2c_addr, PCA9685_MODE1,
@@ -144,9 +131,8 @@ StatusCode pwm_pca9685_set_channel(uint8_t pwm_channel, uint32_t delay, uint32_t
     return E_INVALID_ARGS;
   }
 
-  // Scale each fraction (0..UINT32_MAX) down to a 12-bit tick position
-  // (0..4095). 64-bit intermediate avoids overflow: delay/duty_cycle *
-  // (TICK_MAX-1) can exceed 32 bits before the divide.
+  // Scale each fraction (0..UINT32_MAX) to a 12-bit tick (0..4095) via a
+  // 64-bit intermediate — avoids overflow before the divide.
   uint16_t on_tick = (uint16_t)(((uint64_t)delay * (PCA9685_TICK_MAX - 1U)) / UINT32_MAX);
   uint16_t off_tick = (uint16_t)(((uint64_t)(delay + duty_cycle) * (PCA9685_TICK_MAX - 1U)) / UINT32_MAX);
 
