@@ -63,7 +63,7 @@ static bool uart_task_started = false;
 #endif
 
 // Shared bounds/support check + regs lookup used by every per-channel entry point.
-static PL011Regs *uart_channel_regs(uint8_t channel)
+static inline PL011Regs *uart_channel_regs(uint8_t channel)
 {
   if ((channel >= UART_NUM_CHANNELS) || (uart_hw_table[channel].regs == NULL)) {
     return NULL;
@@ -81,8 +81,10 @@ StatusCode uart_channel_init(uint8_t channel, UartConfig *config)
     return E_NOTSUPP;
   }
 
-  gpio_set_function(config->tx_pin, config->alt_func);
-  gpio_set_pull(config->tx_pin, GPIO_PULL_NONE);
+  if (config->tx_pin != UART_PIN_NONE) {
+    gpio_set_function(config->tx_pin, config->alt_func);
+    gpio_set_pull(config->tx_pin, GPIO_PULL_NONE);
+  }
   if (config->rx_pin != UART_PIN_NONE) {
     gpio_set_function(config->rx_pin, config->alt_func);
     gpio_set_pull(config->rx_pin, GPIO_PULL_NONE);

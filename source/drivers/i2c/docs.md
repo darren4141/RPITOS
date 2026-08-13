@@ -1,10 +1,9 @@
 # i2c
 
-**Status: design plan only — `i2c.c`/`i2c.h` are still empty stubs.** This
-doc records the intended architecture before implementation starts, so it
-follows the same conventions as `uart/docs.md` but is written forward-looking
-rather than as a description of finished code. Update it to present tense
-once the code lands.
+**Status: phase 1 implemented** — `i2c_channel_init`/`deinit`/`write`/`read`/
+`write_read` are all in `i2c.c`. The rest of this doc was written
+forward-looking, before the code landed; it's now a description of what's
+actually there, not a plan.
 
 One BSC (Broadcom Serial Controller) driver shared by every I2C channel on
 the board, configured per-channel via `I2cConfig` — same shape as
@@ -134,6 +133,49 @@ Transfer flow per call (polling, matching the classic BSC sequence): clear
 `DLEN`, fill/drain `FIFO` while polling `S.TXD`/`S.RXD`, set `C.ST` (and
 `C.READ` for reads) to start, poll `S.DONE`, check `S.ERR` (NACK) and
 `S.CLKT` (clock-stretch timeout) before returning `E_OK`.
+
+## Repeated start (`i2c_channel_write_read`)
+
+The BSC has **no hardware repeated-start** — the BCM2835/2711 I2C engine
+doesn't support it natively. `i2c_channel_write_read()` fakes one by
+re-arming `C.ST` while `S.TA` is still asserted from the write phase (i.e.
+before any STOP has happened), which makes the engine chain a repeated
+START into read mode instead of finishing the write with a STOP.
+
+The technique is based on Mike McCauley's `bcm2835` C library —
+`bcm2835_i2c_read_register_rs()`, the reference implementation used across
+the RPi ecosystem for over a decade for exactly this "write register
+address, read the value" idiom:
+
+1. `C.CLEAR` (clear the FIFO), then `S = S_CLEAR_ALL`.
+2. `A = addr`, `DLEN = tx_len`, `C = C_I2CEN` (enabled, no `ST` yet).
+3. **Pre-fill the FIFO with the whole tx payload before setting `ST`** — legal
+   because the FIFO accepts writes once `I2CEN` is set, even pre-transfer.
+4. `C = C_I2CEN | C_ST` — kick off the write phase.
+5. **Poll for `S_TA`** (with `S_DONE` as a fast-path fallback, for a write
+   phase so short it finishes before the poll observes `TA`) — this is the
+   actual hand-off point: once `TA` confirms the START + address are
+   committed to hardware, it's safe to reprogram for the read phase.
+6. `DLEN = rx_len`, then `C = C_I2CEN | C_ST | C_READ` — `ST` again while
+   `TA` is still 1 chains a repeated START instead of a STOP.
+7. Drain the RX FIFO exactly like `i2c_channel_read()`.
+
+**Known limits — not equally verified:**
+- The pre-fill step only works because `tx_len` fits in the 16-byte FIFO in
+  one shot (`I2C_FIFO_DEPTH`); `i2c_channel_write_read()` returns
+  `E_INVALID_ARGS` above that. Extending this to a fill-loop for a write
+  phase that doesn't fit in one FIFO load — feeding `FIFO` via `S_TXD`
+  polling *while also* watching for the `TA` hand-off — is a reasonable
+  extrapolation from the verified pattern, not something with a citable
+  reference implementation. Don't trust it without testing on real hardware
+  first if this limit is ever lifted.
+- Broadcom's own engineer has publicly acknowledged the BSC's
+  clock-stretching implementation is flawed outside the ACK phase. A slave
+  that stretches the clock during exactly this write→read hand-off window
+  can produce unreliable results — this is why the Linux kernel's own
+  `i2c-bcm2835` driver keeps its equivalent "combined transactions" feature
+  opt-in rather than default. Worth keeping in mind if a repeated-start
+  transfer misbehaves on real hardware — it may not be this driver's bug.
 
 ## Open items — verify before implementing
 
