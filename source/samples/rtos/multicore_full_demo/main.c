@@ -7,8 +7,10 @@
 #include "gentimer.h"
 #include "gic.h"
 #include "gpio.h"
+#include "i2c.h"
 #include "jtag.h"
 #include "mutex.h"
+#include "pwm_pca9685.h"
 #include "queue.h"
 #include "scheduler.h"
 #include "semaphore.h"
@@ -23,6 +25,7 @@
 // confirm call two boots in a row.
 #define WATCHDOG_TOLER 1
 
+#include <stdbool.h>
 #include <stdint.h>
 
 static const uint32_t hz = 1000;        // 1 kHz tick, every core
@@ -46,6 +49,7 @@ static TaskControlBlock *tcb_ping = NULL;
 static TaskControlBlock *tcb_queue_recv = NULL;
 static TaskControlBlock *tcb_grind0 = NULL;
 static TaskControlBlock *tcb_grind1 = NULL;
+static TaskControlBlock *tcb_pca_blink = NULL;
 
 // ── Core 1
 static volatile uint32_t core1_clk_freq;
@@ -71,6 +75,45 @@ static UartConfig uart_config = {
   .task_priority = TASK_PRIORITY_5,
 };
 
+// PCA9685 PWM driver — see pwm_pca9685/docs.md. GPIO4/5 ALT5 is I2C_CHANNEL_3
+// per i2c/docs.md's channel table (a phase-1-confirmed channel).
+static I2cConfig pca9685_i2c_config = {
+  .sda_pin = 4,
+  .scl_pin = 5,
+  .alt_func = GPIO_FUNC_ALT5,
+  .baudrate = I2C_BAUDRATE_STANDARD_100K,
+};
+
+static Pca9685Config pca9685_config = {
+  .channel = I2C_CHANNEL_3,
+  // 0x41 (guessed from the boot-time scan) turned out wrong — confirmed
+  // against the original board-specific driver this was ported from:
+  // PCA9685_I2C_ADDR_DEFAULT (now 0x47 in pwm_pca9685.h) is this board's
+  // real address. The scan's 0x70 hit (PCA9685's always-on "All Call"
+  // address) was correctly pointing at a real PCA9685 the whole time —
+  // 0x41 was the wrong guess, not 0x70 being noise.
+  .i2c_addr = PCA9685_I2C_ADDR_DEFAULT,
+  .pwm_freq_hz = 200,          // arbitrary — well within PCA9685_FREQ_HZ_MIN..MAX, fine for an on/off blink
+};
+
+#define PCA_BLINK_CHANNEL_A 4U // PCA9685 PWM output channel, not an I2C channel
+#define PCA_BLINK_CHANNEL_B 5U
+
+// GPIO2/3 ALT0 is I2C_CHANNEL_1 ("i2c_arm") per i2c/docs.md's channel table —
+// scanned at boot alongside I2C_CHANNEL_3 to debug the PCA9685 NACK (see
+// pca_blink_task()); not otherwise used by this sample.
+static I2cConfig i2c1_scan_config = {
+  .sda_pin = 2,
+  .scl_pin = 3,
+  .alt_func = GPIO_FUNC_ALT0,
+  .baudrate = I2C_BAUDRATE_STANDARD_100K,
+};
+
+// Standard 7-bit I2C scan range — 0x00-0x07 and 0x78-0x7F are reserved
+// (general call, 10-bit addressing), same range i2cdetect uses.
+#define I2C_SCAN_ADDR_MIN 0x08U
+#define I2C_SCAN_ADDR_MAX 0x77U
+
 #ifdef RTOS_TELEMETRY
 static UartConfig telemetry_uart_config = {
   .tx_pin = 12,
@@ -91,6 +134,30 @@ static WatchdogConfig watchdog_config = {
   .multicore_mode = true,
   .companion_core_ctx = &cc_ctx,
 };
+
+// Probes every address in the standard 7-bit range with a 1-byte read and
+// prints which ones ACK. A 0-byte write (the classic i2cdetect technique) is
+// deliberately NOT used here — i2c_channel_write()/read() now reject
+// len == 0 outright, since DLEN=0 proved unreliable on this hardware (see
+// i2c/docs.md). channel must already be i2c_channel_init()'d. No
+// task-context requirement (i2c_channel_read() only polls, never blocks on
+// the scheduler) — safe to call from kmain() before scheduler_start(), same
+// as i2c_channel_init() itself.
+static void i2c_bus_scan(uint8_t channel, const char *label)
+{
+  uart_printf("i2c: scanning %s (channel %u)...\r\n", label, channel);
+  uint32_t found = 0;
+  uint8_t dummy;
+  for (uint16_t addr = I2C_SCAN_ADDR_MIN; addr <= I2C_SCAN_ADDR_MAX; addr++) {
+    if (i2c_channel_read(channel, (uint8_t)addr, &dummy, 1) == E_OK) {
+      uart_printf("i2c: %s — device found at 0x%02X\r\n", label, addr);
+      found++;
+    }
+  }
+  if (found == 0) {
+    uart_printf("i2c: %s — no devices found\r\n", label);
+  }
+}
 
 // Busy-spins the calling task for roughly ms milliseconds — real RUNNING
 // time, not a blocking delay (see README).
@@ -118,6 +185,39 @@ static void mutex_counter_task(void *params)
     busy_work_ms(30U);
     mutex_unlock(&g_counter_mutex);
     task_delay_ms(300U);
+  }
+}
+
+// Core 0 — blinks PCA9685 PWM channels 4 and 5 together (full-on/full-off,
+// not a soft fade) at 1 Hz. pwm_pca9685_init() itself must run in task
+// context (it blocks on task_delay_ms() for the datasheet's post-SLEEP-clear
+// settle time — see pwm_pca9685/docs.md), so it happens here at task start
+// rather than in kmain(); i2c_channel_init() has no such requirement and
+// already ran in kmain() before scheduler_start().
+static void pca_blink_task(void *params)
+{
+  (void)params;
+
+  StatusCode ret = pwm_pca9685_init(&pca9685_config);
+  if (ret != E_OK) {
+    uart_printf("core 0: pwm_pca9685_init failed (%d) — blink task parked\r\n", ret);
+    while (1) {
+      task_delay_ms(1000U);
+    }
+  }
+
+  bool led_on = false;
+  while (1) {
+    if (led_on) {
+      pwm_pca9685_set_channel_full_off(PCA_BLINK_CHANNEL_A);
+      pwm_pca9685_set_channel_full_off(PCA_BLINK_CHANNEL_B);
+    }
+    else {
+      pwm_pca9685_set_channel_full_on(PCA_BLINK_CHANNEL_A);
+      pwm_pca9685_set_channel_full_on(PCA_BLINK_CHANNEL_B);
+    }
+    led_on = !led_on;
+    task_delay_ms(500U);
   }
 }
 
@@ -291,6 +391,17 @@ void kmain(void)
 
   uart_init(&uart_config);
 
+  // No task-context requirement here (unlike pwm_pca9685_init() — see
+  // pca_blink_task()), so this can run directly in kmain().
+  i2c_channel_init(I2C_CHANNEL_3, &pca9685_i2c_config);
+  i2c_channel_init(I2C_CHANNEL_1, &i2c1_scan_config);
+
+  // Debugging the PCA9685 NACK (see pca_blink_task()) — scan both buses
+  // before releasing any core, so the results are in the boot log
+  // regardless of what the scheduler/other cores do afterward.
+  i2c_bus_scan(I2C_CHANNEL_1, "GPIO2/3");
+  i2c_bus_scan(I2C_CHANNEL_3, "GPIO4/5");
+
 #ifdef RTOS_TELEMETRY
   // Must run before any core's scheduler_init() — see instrumentation.md.
   uart_channel_init(UART_CHANNEL_TELEMETRY, &telemetry_uart_config);
@@ -305,7 +416,7 @@ void kmain(void)
 #endif
 
   uart_print("\r\n=== multicore_full_demo ===\r\n"
-             "core 0: RTOS — mutex counter + semaphore ping + queue receiver\r\n"
+             "core 0: RTOS — mutex counter + semaphore ping + queue receiver + PCA9685 blink\r\n"
              "core 1: RTOS — mutex counter + semaphore pong\r\n"
              "core 2: RTOS — mutex counter + queue sender\r\n"
              "core 3: telemetry publisher (dedicated, no app tasks)\r\n\r\n");
@@ -331,6 +442,7 @@ void kmain(void)
   task_create(queue_recv_task, 2048, TASK_PRIORITY_2, NULL, "queue_recv", &tcb_queue_recv);
   task_create(grind_task, 2048, TASK_PRIORITY_1, NULL, "grind0", &tcb_grind0);
   task_create(grind_task_2, 2048, TASK_PRIORITY_1, NULL, "grind1", &tcb_grind1);
+  task_create(pca_blink_task, 2048, TASK_PRIORITY_1, NULL, "pca_blink", &tcb_pca_blink);
 
   watchdog_task_start();
 
