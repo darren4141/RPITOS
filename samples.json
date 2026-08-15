@@ -10,6 +10,7 @@
     "rtos/software_timer",
     "rtos/multicore_blink",
     "rtos/multicore_full_demo",
-    "rtos/pwm_fade_demo"
+    "rtos/pwm_fade_demo",
+    "rtos/i2s_stream_demo"
   ]
 }
